@@ -5,6 +5,10 @@ Use Codex from inside Claude Code for code reviews or to delegate tasks to Codex
 This plugin is for Claude Code users who want an easy way to start using Codex from the workflow
 they already have.
 
+This fork also contains an experimental [native Codex subagent Mod](plugins/codex-native-prototype/README.md).
+It uses Claude's Agent lifecycle with streamed Codex responses, live activity, and cancellation.
+Run `npm run prototype` to try the separate, read-only prototype; the official plugin remains available below.
+
 <video src="./docs/plugin-demo.webm" controls muted playsinline autoplay></video>
 
 ## What You Get

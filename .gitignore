@@ -148,3 +148,6 @@ vite.config.ts.timestamp-*
 
 output/
 plugins/codex/.generated/
+plugins/codex-native-prototype/.claude-plugin/types/
+tests/fixtures/native-agent-driver/.claude-plugin/types/
+tests/fixtures/native-agent-driver/tsconfig.json

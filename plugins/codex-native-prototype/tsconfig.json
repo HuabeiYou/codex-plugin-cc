@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2023","lib":["ES2023"],"types":[],"module":"ESNext","moduleResolution":"Bundler","allowJs":true,"checkJs":true,"noEmit":true,"strict":false,"strictNullChecks":true,"skipLibCheck":true},"include":[".claude-plugin/types","hooks"]}

@@ -306,6 +306,8 @@ rl.on("line", (line) => {
         break;
 
       case "thread/start": {
+        state.lastThreadStart = message.params;
+        saveState(state);
         if (BEHAVIOR === "auth-run-fails") {
           throw new Error("authentication expired; run codex login");
         }
@@ -451,8 +453,30 @@ rl.on("line", (line) => {
 	          effort: message.params.effort ?? null,
 	          prompt
 	        };
-	        saveState(state);
+        saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
+
+        if (BEHAVIOR === "native-stream-task" || BEHAVIOR === "native-failed-task") {
+          state.nativeCommandStarts = (state.nativeCommandStarts || 0) + 1;
+          saveState(state);
+          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+          const params = { threadId: thread.id, turnId };
+          send({ method: "item/started", params: { ...params, item: { type: "commandExecution", id: "read_once", command: "cat README.md", status: "inProgress" } } });
+          send({ method: "item/commandExecution/outputDelta", params: { ...params, itemId: "read_once", delta: "repository description" } });
+          send({ method: "item/completed", params: { ...params, item: { type: "commandExecution", id: "read_once", command: "cat README.md", status: "completed", exitCode: 0 } } });
+          if (BEHAVIOR === "native-failed-task") {
+            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "failed", { message: "Synthetic provider failure" }) } });
+          } else {
+            send({ method: "item/started", params: { ...params, item: { type: "agentMessage", id: "native_answer", text: "", phase: "final_answer" } } });
+            send({ method: "item/agentMessage/delta", params: { ...params, itemId: "native_answer", delta: "Read-only " } });
+            setTimeout(() => {
+              send({ method: "item/agentMessage/delta", params: { ...params, itemId: "native_answer", delta: "answer." } });
+              send({ method: "item/completed", params: { ...params, item: { type: "agentMessage", id: "native_answer", text: "Read-only answer.", phase: "final_answer" } } });
+              send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
+            }, 50);
+          }
+          break;
+        }
 
         const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
           ? structuredReviewPayload(prompt)

@@ -1,0 +1,1 @@
+{"name":"native-agent-acceptance-driver","version":"0.0.1","description":"Test-only driver for the real Claude Agent lifecycle; supplies parent responses without model calls.","author":{"name":"Prototype tests"}}
