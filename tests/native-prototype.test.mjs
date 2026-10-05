@@ -6,17 +6,18 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { makeTempDir } from "./helpers.mjs";
-import { runCodex, cancelRun } from "../plugins/codex-native-prototype/scripts/bridge.mjs";
+import { runCodex, cancelRun, taskRequest, bindOutput } from "../plugins/codex-native-prototype/scripts/bridge.mjs";
 import { createRun, acceptEvent, readEvents } from "../plugins/codex-native-prototype/hooks/protocol.mjs";
 
 function fixture(behavior) {
   const bin = makeTempDir();
   installFakeCodex(bin, behavior);
-  return { bin, env: buildEnv(bin), cwd: makeTempDir(), runId: randomUUID(), prompt: "Read README.md exactly once." };
+  return { bin, env: { ...buildEnv(bin), CLAUDE_PLUGIN_DATA: path.join(bin, "data"), CODEX_COMPANION_SESSION_ID: "native-test-session" }, cwd: makeTempDir(), runId: randomUUID(), prompt: "Read README.md exactly once." };
 }
 
 test("native bridge streams a real app-server protocol turn without repeating its final text or executing tools twice", async () => {
   const options = fixture("native-stream-task");
+  options.prompt = JSON.stringify({ task: options.prompt, write: false });
   const events = [];
   const result = await runCodex(options, (event) => events.push(event));
   assert.equal(result.status, "completed");
@@ -32,6 +33,17 @@ test("native bridge streams a real app-server protocol turn without repeating it
   assert.equal(fs.existsSync(path.join(os.tmpdir(), `codex-native-prototype-${options.runId}`)), false);
 });
 
+test("native worker uses rescue write permissions and persists its task for continuation", async () => {
+  const options = fixture("native-stream-task");
+  const events = [];
+  const result = await runCodex(options, (event) => events.push(event));
+  const state = JSON.parse(fs.readFileSync(path.join(options.bin, "fake-codex-state.json")));
+  assert.equal(state.lastThreadStart.sandbox, "workspace-write");
+  assert.equal(state.lastThreadStart.ephemeral, false);
+  assert.ok(result.jobId, "Native work must be tracked by the existing rescue runtime");
+  assert.match(fs.readFileSync(result.reportFile, "utf8"), /Codex task completed.*Read-only answer\./s);
+});
+
 test("native bridge returns failed status and the provider error instead of success", async () => {
   const result = await runCodex(fixture("native-failed-task"), () => {});
   assert.equal(result.status, "failed");
@@ -42,7 +54,14 @@ test("native cancellation sends turn/interrupt to the owning thread and waits fo
   const options = fixture("interruptible-slow-task");
   await runCodex(options, (event) => {
     if (event.kind === "ready") assert.equal(cancelRun(options.runId).requested, true);
-  }).then((result) => assert.equal(result.status, "interrupted"));
+  }).then((result) => {
+    assert.equal(result.status, "interrupted");
+    const root = path.join(options.bin, "data", "state");
+    const workspaceState = path.join(root, fs.readdirSync(root)[0]);
+    const job = JSON.parse(fs.readFileSync(path.join(workspaceState, "jobs", result.jobId + ".json")));
+    assert.equal(job.status, "cancelled");
+    assert.equal(job.pid, null);
+  });
   const state = JSON.parse(fs.readFileSync(path.join(options.bin, "fake-codex-state.json")));
   assert.equal(state.lastInterrupt.threadId, state.lastTurnStart.threadId);
   assert.equal(state.lastInterrupt.turnId, state.lastTurnStart.turnId);
@@ -89,4 +108,71 @@ test("JSONL activity survives arbitrary stdout chunk boundaries and remains boun
   for (let i = 0; i < 200; i++) acceptEvent(run, { kind: "activity", label: String(i) });
   assert.equal(run.activity.length, 100);
   assert.equal(run.activity[0].label, "100");
+});
+
+
+test("native implementation changes a workspace file and emits its file-change activity", async () => {
+  const options = fixture("native-edit-task");
+  const events = [];
+  const result = await runCodex({ ...options, prompt: "Implement the requested change." }, (e) => events.push(e));
+  assert.equal(result.status, "completed");
+  assert.equal(fs.readFileSync(path.join(options.cwd, "native-edit-proof.txt"), "utf8"), "edited by simulated Codex");
+  assert.ok(events.some((e) => e.type === "fileChange" && e.status === "completed"));
+  assert.ok(result.touchedFiles.includes("native-edit-proof.txt"));
+});
+
+test("worker continuation uses rescue's saved thread and explicit model and effort controls", async () => {
+  const options = fixture("native-stream-task");
+  const first = await runCodex(options, () => {});
+  const second = await runCodex({ ...options, runId: randomUUID(), prompt: JSON.stringify({ task: "Continue the fix.", resumeLast: true, model: "spark", effort: "high" }) }, () => {});
+  const state = JSON.parse(fs.readFileSync(path.join(options.bin, "fake-codex-state.json")));
+  assert.equal(second.threadId, first.threadId);
+  assert.equal(state.lastThreadResume.threadId, first.threadId);
+  assert.equal(state.lastTurnStart.model, "gpt-5.3-codex-spark");
+  assert.equal(state.lastTurnStart.effort, "high");
+  assert.notEqual(second.jobId, first.jobId);
+});
+
+test("native task controls reject invalid envelopes and preserve option-like task text", () => {
+  assert.throws(() => taskRequest('{"task":"Fix it","write":"false"}'), /boolean/);
+  assert.throws(() => taskRequest('{"task":"Fix it","unknown":true}'), /Unknown/);
+  assert.equal(taskRequest('{"task":"Keep --write and $(echo text) literal","write":false}').prompt, 'Keep --write and $(echo text) literal');
+});
+
+test("a native rescue task stays attached beyond the old two-minute limit", { timeout: 160000 }, async () => {
+  const options = fixture("native-long-task");
+  let connectedAt;
+  let pid;
+  let stopTimer;
+  const events = [];
+  try {
+    const result = await runCodex(options, (e) => {
+      events.push(e);
+      if (e.kind === "ready") {
+        connectedAt = Date.now(); pid = e.appServerPid;
+        stopTimer = setTimeout(() => cancelRun(options.runId), 125000);
+      }
+    });
+    assert.ok(Date.now() - connectedAt >= 125000, "Use actual elapsed time, not a simulated clock");
+    assert.equal(result.status, "interrupted");
+    assert.ok(events.some((e) => e.type === "turn"));
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  } finally { clearTimeout(stopTimer); }
+});
+
+
+test("native output binding replaces only the owned task artifact, preserving its transcript target", async () => {
+  const options = fixture("native-stream-task");
+  const tasks = path.join(options.cwd, "tasks");
+  fs.mkdirSync(tasks);
+  const outputFile = path.join(tasks, "owned-agent.output");
+  const transcript = path.join(options.cwd, "model-transcript.jsonl");
+  fs.writeFileSync(transcript, '{"original":true}');
+  fs.symlinkSync(transcript, outputFile);
+  assert.throws(() => bindOutput(options.runId, outputFile, "another-agent", options.env), /Invalid native output/);
+  bindOutput(options.runId, outputFile, "owned-agent", options.env);
+  await runCodex(options, () => {});
+  assert.equal(fs.lstatSync(outputFile).isSymbolicLink(), false);
+  assert.match(fs.readFileSync(outputFile, "utf8"), /Codex task completed.*Read-only answer\./s);
+  assert.equal(fs.readFileSync(transcript, "utf8"), '{"original":true}');
 });

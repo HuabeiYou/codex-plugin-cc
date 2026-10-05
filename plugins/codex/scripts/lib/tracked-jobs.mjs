@@ -153,7 +153,7 @@ export async function runTrackedJob(job, runner, options = {}) {
 
   try {
     const execution = await runner();
-    const completionStatus = execution.exitStatus === 0 ? "completed" : "failed";
+    const completionStatus = execution.cancelled ? "cancelled" : execution.exitStatus === 0 ? "completed" : "failed";
     const completedAt = nowIso();
     writeJobFile(job.workspaceRoot, job.id, {
       ...runningRecord,
@@ -161,7 +161,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
       pid: null,
-      phase: completionStatus === "completed" ? "done" : "failed",
+      phase: completionStatus === "completed" ? "done" : completionStatus,
       completedAt,
       result: execution.payload,
       rendered: execution.rendered
@@ -172,7 +172,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null,
       summary: execution.summary,
-      phase: completionStatus === "completed" ? "done" : "failed",
+      phase: completionStatus === "completed" ? "done" : completionStatus,
       pid: null,
       completedAt
     });
@@ -184,8 +184,8 @@ export async function runTrackedJob(job, runner, options = {}) {
     const completedAt = nowIso();
     writeJobFile(job.workspaceRoot, job.id, {
       ...existing,
-      status: "failed",
-      phase: "failed",
+      status: options.signal?.aborted ? "cancelled" : "failed",
+      phase: options.signal?.aborted ? "cancelled" : "failed",
       errorMessage,
       pid: null,
       completedAt,
@@ -193,8 +193,8 @@ export async function runTrackedJob(job, runner, options = {}) {
     });
     upsertJob(job.workspaceRoot, {
       id: job.id,
-      status: "failed",
-      phase: "failed",
+      status: options.signal?.aborted ? "cancelled" : "failed",
+      phase: options.signal?.aborted ? "cancelled" : "failed",
       pid: null,
       errorMessage,
       completedAt

@@ -1,15 +1,15 @@
 # Replace the official plugin with this fork
 
-The field-test bundle is one plugin, `codex@huabei-codex`. It contains the patched companion runtime and the native Mod. Its native worker is `codex:worker`. Claude supervises its agents and reads their feedback automatically; progress views remain optional.
+The field-test bundle is one plugin, `codex@huabei-codex`. It contains the patched companion runtime and the native Mod. Its worker is `codex:worker`, using the full rescue runtime with file edits, long tasks, saved threads, and live activity. Claude supervises its agents and reads their feedback automatically; progress views remain optional.
 
-Build and validate the package from this repository:
+Finish or stop active delegated work and close Claude Code sessions before rebuilding. Claude may read this local package directly during a session. Build and validate the package from this repository:
 
 ```bash
 npm run bundle:validate
 npm run bundle:test
 ```
 
-Finish or stop any active delegated work, then close existing Claude Code sessions. Run these commands in your terminal:
+For a first installation, run these commands in your terminal:
 
 ```bash
 claude plugin marketplace add "$PWD/output/codex-local-marketplace"
@@ -26,12 +26,15 @@ Start Claude normally in the project you want to work on:
 claude
 ```
 
-No `--plugin-dir` flags are needed. Ask Claude to use `codex:worker` for native read-only investigation or review. `/codex-native-status` opens the optional activity pane. Existing `/codex:rescue`, `/codex:review`, and other companion commands remain available in the same plugin. Native tasks remain read-only, have a two-minute connected-task limit, and cannot resume across session restarts; companion rescue retains its existing write-capable behavior when authorized.
+No `--plugin-dir` flags are needed. Ask Claude to use `codex:worker` for implementation, debugging, or continuation. `/codex:rescue` delegates to that same worker; the old forwarding agent is absent. `/codex-native-status` opens the optional activity pane. Other companion commands, including review, remain available.
 
-Keep the generated local marketplace at its current path for this trial. To update from later source changes, rebuild it, refresh the marketplace, and update the installed plugin:
+The worker uses rescue's workspace-write sandbox by default and can edit project files. Claude selects explicit read-only scope when the task requires it. Workers stay attached until completion, with no fixed task-duration cap. Claude reads their native completion feedback automatically. Saved Codex threads support continuation within the current Claude session; restarting Claude does not restore in-flight workers.
+
+Keep the generated local marketplace at its current path for this trial. To update from later source changes, first finish or stop delegated work and close Claude Code. Then rebuild, refresh the marketplace, and update:
 
 ```bash
 npm run bundle:validate
+npm run bundle:test
 claude plugin marketplace update huabei-codex
 claude plugin update codex@huabei-codex
 ```

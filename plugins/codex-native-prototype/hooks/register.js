@@ -1,4 +1,4 @@
-// PROTOTYPE: Claude manages the Agent; Codex executes its read-only task.
+// Claude manages the Agent; the shared rescue runtime executes its task.
 import { createRun, acceptEvent, readEvents, finalAnswer } from './protocol.mjs';
 
 const runs = new Map();
@@ -42,12 +42,12 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.agent.register({
       name: 'worker',
-      description: 'Use Codex for a read-only investigation, code review, or second opinion, with live activity. This prototype cannot edit files. Before delegating, apply codex-native-prototype:codex-native-supervision; retain its task handle, read completion feedback, and complete the user task.',
-      prompt: 'Carry out the delegated read-only task. The Codex mod supplies your response.',
+      description: 'Delegate substantial implementation, debugging, investigation, or continuation to Codex with live activity. Uses the rescue runtime with file edits and persistent threads. Before delegating, apply codex-native-prototype:codex-native-supervision for task controls and parent ownership through completion.',
+      prompt: 'Carry out the delegated task. The Codex Mod runs the shared rescue runtime and supplies your response.',
       tools: [],
       maxTurns: 1
     });
-    await $.command.register({ name: 'codex-native', description: 'Start a read-only native Codex agent', argumentHint: '<task>', immediate: true });
+    await $.command.register({ name: 'codex-native', description: 'Delegate a task to the native Codex worker', argumentHint: '<task>', immediate: true });
     await $.command.register({ name: 'codex-native-status', description: 'Show native Codex agents and open their activity', immediate: true });
     await $.command.register({ name: 'codex-native-stop', description: 'Stop a native Codex agent', argumentHint: '<agent-id>', immediate: true });
     return next(e);
@@ -57,10 +57,28 @@ export function register(on) {
     const spawned = await next(e);
     if (spawned.agentId) {
       spawnRows.set(spawned.agentId, { toolUseId: e.tool_use_id, prompt: e.prompt, cwd: e.cwd });
-      const run = runs.get(spawned.agentId);
-      if (run) run.toolUseId = e.tool_use_id;
+      let run = runs.get(spawned.agentId);
+      if (!run) { run = createRun(spawned.agentId, e.description || 'Codex task', crypto.randomUUID()); runs.set(spawned.agentId, run); }
+      run.toolUseId = e.tool_use_id;
+      $.ui.invalidate('ui.render');
     }
     return spawned;
+  });
+
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    const response = await next(e);
+    if (response.deny !== undefined || response.isError) return response;
+    const result = /** @type {{ agentId?: string, isAsync?: boolean, outputFile?: string, canReadOutputFile?: boolean } | undefined} */ (response.result);
+    if (!result?.agentId || !result.isAsync) return response;
+    const run = runs.get(result.agentId);
+    if (!run) return response;
+    // Mod-supplied answers do not create Claude's usual child transcript file.
+    // Give the parent an actual report artifact through the ordinary Agent handle.
+    const outputFile = result.outputFile;
+    if (!outputFile) return response;
+    const bound = await $.process.run(['node', `${$.plugin.root}/scripts/bridge.mjs`, 'bind-output', run.id, outputFile, result.agentId]);
+    if (bound.exitCode !== 0) throw new Error(`Could not bind Codex report: ${bound.stderr}`);
+    return response;
   });
 
   on('turn.step', async function* ($, e, next) {
@@ -69,14 +87,15 @@ export function register(on) {
     const agent = agents.find((candidate) => candidate.id === e.agentId && candidate.type === AGENT_TYPE);
     if (!agent) return yield* next(e);
     let run = runs.get(e.agentId);
-    if (run) {
+    if (run?.started) {
       // Never rerun a Codex task if Claude's loop unexpectedly requests a retry.
       const answer = finalAnswer(run);
       yield { kind: 'text', index: 0, text: answer };
       yield { kind: 'stop', stopReason: 'end_turn', usage: null };
       return stepResult(e, answer);
     }
-    run = createRun(e.agentId, agent.description, crypto.randomUUID());
+    run ??= createRun(e.agentId, agent.description, crypto.randomUUID());
+    run.started = true;
     runs.set(e.agentId, run);
     const row = spawnRows.get(e.agentId);
     run.toolUseId = row?.toolUseId ?? null;
@@ -94,6 +113,7 @@ export function register(on) {
       stream = $.process.spawn({
         argv: ['node', `${$.plugin.root}/scripts/bridge.mjs`, 'run', run.id],
         cwd: row?.cwd || await $.session.cwd(),
+        env: { CODEX_COMPANION_SESSION_ID: await $.session.id() },
         input: JSON.stringify({ prompt })
       });
       while (true) {
@@ -147,7 +167,7 @@ export function register(on) {
   });
 
   on('command.run', { command: 'codex-native' }, async ($, e) => {
-    if (!e.args.trim()) return { text: 'Usage: /codex-native <read-only task>' };
+    if (!e.args.trim()) return { text: 'Usage: /codex-native <task>' };
     const spawned = await $.agent.spawn({ subagentType: AGENT_TYPE, prompt: e.args, description: e.args.slice(0, 60) });
     return { text: spawned.deny || `Started Codex agent ${spawned.agentId}. Use /codex-native-status for activity.` };
   });

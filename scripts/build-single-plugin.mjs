@@ -38,11 +38,13 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   for (const name of ['agents', 'commands', 'hooks', 'skills', 'scripts', 'schemas', 'prompts', 'NOTICE', 'LICENSE', 'CHANGELOG.md']) {
     fs.cpSync(path.join(official, name), path.join(pluginRoot, name), { recursive: true });
   }
+  fs.rmSync(path.join(pluginRoot, 'agents', 'codex-rescue.md'));
+  fs.writeFileSync(path.join(pluginRoot, 'commands', 'rescue.md'), fs.readFileSync(path.join(native, 'commands', 'rescue.md'), 'utf8').replaceAll('codex-native-prototype:', 'codex:'));
   const baseManifest = json(path.join(official, '.claude-plugin', 'plugin.json'));
   const nativeManifest = json(path.join(native, '.claude-plugin', 'plugin.json'));
   const hash = createHash('sha256');
   for (const name of ['agents', 'commands', 'hooks', 'skills', 'scripts', 'schemas', 'prompts']) hashFiles(hash, path.join(official, name));
-  for (const name of ['hooks', 'scripts', 'skills', 'tests']) hashFiles(hash, path.join(native, name));
+  for (const name of ['hooks', 'scripts', 'skills', 'tests', 'commands']) hashFiles(hash, path.join(native, name));
   hash.update(fs.readFileSync(fileURLToPath(import.meta.url)));
   const version = `${baseManifest.version}-native.${nativeManifest.version}.h${hash.digest('hex').slice(0, 12)}`;
   writeJson(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), {
@@ -59,7 +61,7 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   fs.writeFileSync(path.join(pluginRoot, 'hooks', 'native', 'register.js'), register);
   fs.copyFileSync(path.join(native, 'hooks', 'protocol.mjs'), path.join(pluginRoot, 'hooks', 'native', 'protocol.mjs'));
   const bridge = fs.readFileSync(path.join(native, 'scripts', 'bridge.mjs'), 'utf8')
-    .replace('"../../codex/scripts/lib/app-server.mjs"', '"./lib/app-server.mjs"');
+    .replace('"../../codex/scripts/codex-companion.mjs"', '"./codex-companion.mjs"');
   fs.writeFileSync(path.join(pluginRoot, 'scripts', 'native-bridge.mjs'), bridge);
   fs.cpSync(path.join(native, 'skills'), path.join(pluginRoot, 'skills'), { recursive: true });
   fs.copyFileSync(path.join(native, 'tsconfig.json'), path.join(pluginRoot, 'tsconfig.json'));
@@ -68,7 +70,7 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   fs.writeFileSync(path.join(pluginRoot, 'README.md'), [
     '# Codex for Claude Code', '',
     'One plugin combines the patched companion runtime and the experimental native Mod. Claude supervises agents and reads their feedback automatically.', '',
-    'Use the `codex:worker` agent for native read-only work. The `/codex-native`, `/codex-native-status`, and `/codex-native-stop` commands remain available. Existing `/codex:rescue` and review commands use the patched companion. Native tasks have a two-minute connected-task limit and no resume across session restarts.', ''
+    'Use `codex:worker` for implementation, debugging, and continuation with live activity. It uses the rescue runtime and supports file edits. The `/codex-native`, `/codex-native-status`, and `/codex-native-stop` commands remain available. `/codex:rescue` delegates to the same worker. Review commands remain available. Tasks have no fixed duration cap; saved Codex threads support continuation.', ''
   ].join('\n'));
   writeJson(path.join(destination, '.claude-plugin', 'marketplace.json'), {
     name: 'huabei-codex', owner: { name: 'HuabeiYou' },

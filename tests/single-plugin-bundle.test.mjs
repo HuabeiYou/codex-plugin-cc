@@ -30,6 +30,8 @@ test('single plugin build is deterministic and contains both hook systems and on
     assert.deepEqual(hooks.modules, ['./native/register.js']);
     const register = fs.readFileSync(path.join(pluginRoot, 'hooks/native/register.js'), 'utf8');
     assert.match(register, /codex:worker/);
+    assert.equal(fs.existsSync(path.join(pluginRoot, 'agents/codex-rescue.md')), false);
+    assert.match(fs.readFileSync(path.join(pluginRoot, 'commands/rescue.md'), 'utf8'), /codex:worker/);
     assert.match(register, /codex:codex-native-supervision/);
     assert.doesNotMatch(register, /codex-native-prototype:/);
     assert.ok(fs.existsSync(path.join(pluginRoot, 'skills/codex-job-supervision/SKILL.md')));

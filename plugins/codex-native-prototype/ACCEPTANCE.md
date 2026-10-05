@@ -1,3 +1,25 @@
+# Write-capable worker field-test build (2026-10-05)
+
+The `0.2.0` worker calls the existing rescue runtime. The single-plugin staging build `1.0.6-native.0.2.0.h7c2e1b9f2128` passed strict validation, six Mod tests, and TypeScript checks. Its catalog exposes one worker, and `/codex:rescue` delegates to it.
+
+The real Claude host, using a **simulated Codex provider**, passed:
+
+| Scenario | Claude session | Evidence |
+| --- | --- | --- |
+| Implementation | `059a9701-c6a4-4777-bb40-b0d6f60e7685` | Workspace file changed, file-change activity emitted, native agent completed |
+| Background report | `6fe1df34-cc3e-4685-a79d-00047c9fced8` | Agent completed; parent Read retrieved its full report through the native output-file handle |
+| TaskStop | `59bad181-d062-4cf7-a95c-b414dc4b2c9f` | Owned Codex turn interrupted; app-server stopped |
+
+Each run used zero Claude model calls. No owned app-server survived completion or cancellation. All 111 Node tests passed (130.7 seconds for the full suite). They check explicit read-only scope, write permissions, model and effort selection, saved-thread continuation, failure reports, and an actual 125-second task beyond the former two-minute cap.
+
+The background-read test first exposed an unavailable native transcript link. The Mod now publishes the Codex report at the owned native task output artifact, with an atomic replacement that preserves the transcript target. The regression checks the report read and ownership boundary.
+
+These checks establish the runtime and native host paths with a simulated provider. Interactive pixel layout and reliability with the real configured provider remain part of the normal-use field trial. The existing installed package was left unchanged while this staging build was tested.
+
+---
+
+> Historical evidence for the earlier read-only prototype. The current write-capable worker uses the rescue runtime; these real-provider results do not validate that new execution path.
+
 # Prototype acceptance evidence
 
 Validated October 4, 2026 (America/Los_Angeles), using Claude Code 2.1.289, Codex 0.160.0, Node 24.16.0, and configured Codex model `gpt-6.1-sol`.

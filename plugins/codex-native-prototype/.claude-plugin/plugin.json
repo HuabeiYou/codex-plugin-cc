@@ -1,6 +1,6 @@
 {
   "name": "codex-native-prototype",
-  "version": "0.1.0",
-  "description": "Experimental native Claude subagent lifecycle with read-only Codex execution and live activity.",
+  "version": "0.2.0",
+  "description": "Native Claude subagent lifecycle around the rescue runtime, with file edits, continuation, and live activity.",
   "author": { "name": "HuabeiYou" }
 }

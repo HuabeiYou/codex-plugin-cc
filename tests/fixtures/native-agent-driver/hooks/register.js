@@ -6,6 +6,8 @@ let steps = 0;
 const bridgeEvents = [];
 let cancelMode = false;
 let stopped = null;
+let backgroundMode = false;
+let feedback = null;
 export function register(on) {
   on('process.spawn', async function* ($, e, next) {
     if (!e.argv.some((arg) => arg.endsWith('/codex-native-prototype/scripts/bridge.mjs') || arg.endsWith('/scripts/native-bridge.mjs'))) return yield* next(e);
@@ -40,17 +42,32 @@ export function register(on) {
     stopped = { taskId: e.task_id, isError: response.isError ?? false };
     return response;
   });
+  on('tool.call', { tool: 'Read' }, async ($, e, next) => {
+    const response = await next(e);
+    feedback = { isError: response.isError ?? false, text: JSON.stringify(response.result) };
+    return response;
+  });
   on('turn.step', async function* ($, e, next) {
     if (e.agentId) return yield* next(e);
     steps++;
     if (steps === 1) {
       const task = await $.env.get('CODEX_NATIVE_ACCEPTANCE_TASK') || 'Read README.md and describe this repository in one sentence. Do not edit anything.';
       cancelMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_CANCEL') === '1';
-      const input = { subagent_type: await $.env.get('CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE') || 'codex-native-prototype:worker', description: 'Native acceptance', prompt: task, run_in_background: cancelMode };
+      backgroundMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_BACKGROUND') === '1';
+      const input = { subagent_type: await $.env.get('CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE') || 'codex-native-prototype:worker', description: 'Native acceptance', prompt: task, run_in_background: backgroundMode || cancelMode };
       yield { kind: 'tool', index: 0, id: 'native_acceptance_agent', name: 'Agent' };
       yield { kind: 'input', index: 0, json: JSON.stringify(input) };
       yield { kind: 'stop', stopReason: 'tool_use', usage: null };
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'Agent', input }], stopReason: 'tool_use', usage: null };
+    }
+    if (backgroundMode && !cancelMode && steps === 2) {
+      for (let attempt = 0; attempt < 300 && !child; attempt++) await $.clock.sleep(100);
+      if (!child) throw new Error('Worker did not deliver completion feedback.');
+      const input = { file_path: result.result.outputFile };
+      yield { kind: 'tool', index: 0, id: 'native_acceptance_output', name: 'Read' };
+      yield { kind: 'input', index: 0, json: JSON.stringify(input) };
+      yield { kind: 'stop', stopReason: 'tool_use', usage: null };
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'Read', input }], stopReason: 'tool_use', usage: null };
     }
     if (cancelMode && steps === 2) {
       // Stop an actual started turn, rather than merely canceling startup.
@@ -63,7 +80,7 @@ export function register(on) {
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'TaskStop', input }], stopReason: 'tool_use', usage: null };
     }
     if (cancelMode) await $.clock.sleep(250);
-    const answer = JSON.stringify({ child, agentId: result?.result?.agentId, stopped, bridgeEvents, scriptedParentSteps: steps });
+    const answer = JSON.stringify({ child, agentId: result?.result?.agentId, stopped, feedback, bridgeEvents, scriptedParentSteps: steps });
     yield { kind: 'text', index: 0, text: answer };
     yield { kind: 'stop', stopReason: 'end_turn', usage: null };
     return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: 'end_turn', usage: null };

@@ -1,106 +1,39 @@
-# Native Codex subagent prototype
+# Native Codex worker
 
-Claude owns the subagent lifecycle; the real Codex harness executes its task. This separate Mod addresses the official plugin's opaque background jobs with native Agent identity, streamed answers, a live activity pane, and cancellation. It is experimental and read-only.
+The worker runs the existing rescue task runtime inside Claude's native Agent lifecycle. It supports implementation, debugging, file edits, explicit model and effort selection, and continuation of a tracked Codex thread. Claude owns completion and reads the report automatically. The activity view is optional user inspection.
 
-For one installed Codex plugin, use the [single-plugin replacement guide](../../SINGLE-PLUGIN.md). The separate directories below remain the development setup.
+Use the [single-plugin replacement guide](../../SINGLE-PLUGIN.md) to install one Codex plugin. Its agent is `codex:worker`; `/codex:rescue` delegates to that same worker. The old `codex:codex-rescue` forwarding agent is absent from this bundle.
 
-## Try it
+## Development setup
 
-Tested with Claude Code **2.1.289**, Codex **0.160.0**, and Node **24.16.0**. Both CLIs must be installed and authenticated. Run from this repository:
-
-```bash
-npm ci
-npm run prototype
-```
-
-This loads the Mod for that Claude session without installing it globally. Start a background agent with:
+Run `npm run prototype` to load the Mod alone for a new Claude session. In this setup the agent is `codex-native-prototype:worker`.
 
 ```text
-/codex-native Read README.md and explain the architecture in one paragraph.
+Use the Codex worker to implement the requested fix and run relevant checks.
 ```
 
-Use `/codex-native-status` to open its activity pane. The pane shows the actual Codex model, Claude agent ID, Codex thread ID, commands, command output, tool activity, and state. It retains the last 100 activity events per run and displays the last 20 events for up to eight runs. Use **Stop Codex**, `/codex-native-stop <agent-id>`, or Claude's native task controls to interrupt it.
+The parent applies `codex-native-supervision`, passes the task and explicit controls, and uses native Agent foreground/background execution. A plain task uses rescue's workspace-write default. A JSON task envelope can select read-only scope, continuation, model, or reasoning effort; the supervision skill defines those fields.
 
-Claude can also delegate through its ordinary Agent tool. Ask:
+## Activity and cancellation
 
-```text
-Use the codex-native-prototype:worker agent to review the bridge read-only.
-Run it in the foreground and summarize its findings.
-```
+The Agent row shows Codex's actual model, task state, and recent activity. `/codex-native-status` opens a pane showing agent and Codex thread IDs, commands, command output, file changes, and nested Codex activity. It retains 100 events per run and shows the latest 20 for up to eight workers. The row is present from launch, including while the worker starts.
 
-Claude chooses delegation in this path, so the parent uses Claude inference as usual. Only the designated worker's model step is replaced by Codex. Ordinary Claude agents pass through unchanged.
+Use Claude's task controls, **Stop Codex**, or `/codex-native-stop <agent-id>` to stop an owned worker. Cancellation interrupts its exact Codex turn and closes its app-server. Workers use separate connections so one worker's stop does not close another's harness.
 
-## Trial with the patched official plugin
+## Shared execution
 
-This fork includes upstream [PR #692](https://github.com/openai/codex-plugin-cc/pull/692) at `36ff14a`, our timeout fallback, and companion job discovery guidance. The rescue agent follows one shared prompt and background contract. The native Mod continues to use its own bridge.
+The native bridge calls `executeNativeTask` in the companion. Both native work and the CLI rescue path use the same tracked-job runner, task execution, sandbox selection, model normalization, saved-thread lookup, and result handling. Task text travels as JSON over stdin; it does not pass through a shell.
 
-To load both local plugins for a new Claude session, run from this repository:
+Each native task stays attached until completion; there is no fixed two-minute task limit. Its default sandbox is `workspace-write`, with the same `approvalPolicy: never` as rescue. Explicit read-only scope uses `read-only`. The Mod inherits the configured Codex provider and model unless the user selects a model.
 
-```bash
-claude --plugin-dir ./plugins/codex --plugin-dir ./plugins/codex-native-prototype
-```
+Saved Codex threads support explicit continuation within the current Claude session. Restarting Claude does not restore an in-flight Agent automatically. Existing companion commands and session cleanup keep their current behavior. The standalone official plugin source retains its forwarding agent; only our single-plugin bundle removes it.
 
-Use `/codex-native` for the native Mod. Use `/codex:rescue` for the patched official forwarding agent. Both plugin directories must stay in this repository layout.
-
-Claude owns each Codex agent it spawns. It retains task handles, reads completion feedback, and continues your task automatically. A rescue forwarding agent stops after returning launch or timeout feedback; the parent continues supervision. Detached companion jobs use repeated bounded waits on their exact job IDs until a terminal result is read. Native Mod workers use Claude's Agent completion feedback. Status commands and the activity pane are available for optional inspection; you do not need to request progress or result retrieval.
-
-Evaluate this revision through normal use for a few days. If a wait remains stuck, retain the command, returned message, selected job ID, and status snapshot so the failure can be traced. Automated instruction and runtime checks do not establish that Claude always follows the instructions. This trial does not change installed plugins or global settings.
-
-## How it works
-
-```mermaid
-sequenceDiagram
-    participant C as Claude Agent lifecycle
-    participant M as Native Mod
-    participant B as Node bridge
-    participant X as Codex app-server
-    C->>M: worker turn.step
-    M->>B: task via stdin
-    B->>X: thread/start, turn/start
-    X-->>B: item activity and answer deltas
-    B-->>M: JSONL events
-    M-->>C: native text stream
-    Note over M: Activity pane and Agent row
-    C->>M: TaskStop / Stop Codex
-    M->>B: abort / cancellation marker
-    B->>X: turn/interrupt
-    X-->>B: interrupted completion
-    B-->>M: result, close, cleanup
-```
-
-The bridge starts one isolated app-server per task, sets `sandbox: read-only` and `approvalPolicy: never`, and inherits your Codex model configuration. It waits for Codex's actual completion before reporting success. A failed bridge returns a visible error; a repeated worker model step reuses its result rather than executing the task again. The existing official plugin's shared broker is untouched.
+A failed bridge returns a visible error. Repeated native model steps reuse the result instead of executing the task again. Ordinary Claude agents pass through unchanged. Parent feedback uses native Agent completion and its output-file handle. The Mod saves the full Codex report at that native task artifact; this also supports headless background workers whose Mod-supplied answers do not create a model transcript. It replaces only the owned worker's temporary output artifact, leaving transcript files untouched. Reports are also retained under the plugin data directory's `native-reports` folder.
 
 ## Validation
 
-Claude generates its version-matched Mod API types when it first loads this plugin. Then:
+Run `npm run prototype:test`, `npm run prototype:validate`, `npm run prototype:acceptance`, and `npm test`. The full Node suite includes an actual elapsed-time check beyond two minutes. Claude generates the Mod API types when it loads the plugin.
 
-```bash
-npm run prototype:validate
-npm run prototype:test
-npm run prototype:acceptance
-npm test
-```
+The scripted acceptance runner uses real Claude Agent and TaskStop tools with a simulated Codex provider, without model requests. It checks a workspace file edit, activity, completion, cancellation, and process cleanup. `--real` uses the configured provider on explicitly read-only tasks and incurs provider usage.
 
-`prototype:test` checks the app-server protocol and uses Claude's actual Mod test engine to exercise streaming, errors, terminal and desktop render trees, and the Stop button. `prototype:acceptance` drives real Claude Agent and TaskStop tools with a **simulated Codex server**, with no model requests. Its report distinguishes this from real-provider evidence.
-
-An optional real-provider run sends the delegated repository task to your configured Codex provider and uses Codex usage:
-
-```bash
-npm run prototype:acceptance -- --real
-```
-
-The test-only driver scripts parent responses, so acceptance checks can require zero Claude model calls while still invoking real Agent tools. It is never loaded by `npm run prototype`. The runner verifies one native agent, foreground completion, TaskStop abortion, and no surviving app-server process. [Acceptance evidence](ACCEPTANCE.md) records the observed results and limitations.
-
-## Prototype limits
-
-- Tasks cannot edit files or request approval. Connected tasks have a two-minute limit. Connection bootstrap inherits the upstream client's behavior and does not yet have its own deadline.
-- Session restart does not resume Codex tasks. State lives in the Mod session.
-- Terminal and Claude desktop support the activity UI; headless mode has streamed text and native task lifecycle but no pane. The VS Code panel is outside this prototype's UI scope.
-- Codex's internal tools do not become Claude tool calls: Claude's tool count can be zero even while the pane shows Codex commands. Nested Codex thread events are labeled, but there is no complete nested-agent tree.
-- Claude records the worker as completed when it returns a visible failure message; the pane carries the underlying Codex failed state.
-- Render trees and button behavior are tested using Claude's UI kit. Pixel layout and keyboard behavior still need an interactive terminal/desktop acceptance pass.
-- The bridge imports the existing official plugin's app-server client from the sibling directory. Keep this repository layout; this is not yet a standalone distributable plugin.
-
-The next step after evaluating this prototype is to extract a stable transport boundary, add explicit permission mapping for editing tasks, and validate interactive task navigation before publishing a replacement.
-
-References: [Claude Mods](https://code.claude.com/docs/en/plugins/mods/overview), [Mod API](https://code.claude.com/docs/en/plugins/mods/api), [Codex app-server](https://learn.chatgpt.com/docs/app-server).
+[Earlier acceptance evidence](ACCEPTANCE.md) covers the former read-only prototype. It is not evidence for the write-capable revision. Use this revision normally for a few days to assess real-provider behavior and interactive terminal layout.

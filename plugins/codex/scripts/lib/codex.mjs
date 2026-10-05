@@ -559,6 +559,19 @@ function applyTurnNotification(state, message) {
 async function captureTurn(client, threadId, startRequest, options = {}) {
   const state = createTurnCaptureState(threadId, options);
   const previousHandler = client.notificationHandler;
+  let interruptSent = false;
+  let stopDeadline;
+  const interrupt = () => {
+    if (!state.turnId || state.completed || interruptSent) return;
+    interruptSent = true;
+    stopDeadline = setTimeout(() => state.rejectCompletion(new Error("Codex did not confirm interruption within five seconds.")), 5000);
+    void client.request("turn/interrupt", { threadId, turnId: state.turnId }).catch(state.rejectCompletion);
+  };
+  options.signal?.addEventListener("abort", interrupt);
+  void state.completion.catch(() => {});
+  void client.exitPromise.then(() => {
+    if (!state.completed) state.rejectCompletion(client.exitError ?? new Error("Codex connection closed before completion."));
+  });
 
   client.setNotificationHandler((message) => {
     if (!state.turnId) {
@@ -567,6 +580,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     }
 
     if (message.method === "thread/started" || message.method === "thread/name/updated") {
+      options.onNotification?.(message);
       applyTurnNotification(state, message);
       return;
     }
@@ -578,6 +592,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
         return;
     }
 
+    options.onNotification?.(message);
     applyTurnNotification(state, message);
   });
 
@@ -590,6 +605,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     }
     for (const message of state.bufferedNotifications) {
       if (belongsToTurn(state, message)) {
+        options.onNotification?.(message);
         applyTurnNotification(state, message);
       } else {
         if (previousHandler) {
@@ -598,6 +614,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       }
     }
     state.bufferedNotifications.length = 0;
+    if (options.signal?.aborted) interrupt();
 
     if (response.turn?.status && response.turn.status !== "inProgress") {
       completeTurn(state, response.turn);
@@ -605,15 +622,17 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
 
     return await state.completion;
   } finally {
+    options.signal?.removeEventListener("abort", interrupt);
+    clearTimeout(stopDeadline);
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }
 }
 
-async function withAppServer(cwd, fn) {
+async function withAppServer(cwd, fn, clientOptions = {}) {
   let client = null;
   try {
-    client = await CodexAppServerClient.connect(cwd);
+    client = await CodexAppServerClient.connect(cwd, clientOptions);
     const result = await fn(client);
     await client.close();
     return result;
@@ -632,7 +651,7 @@ async function withAppServer(cwd, fn) {
       throw error;
     }
 
-    const directClient = await CodexAppServerClient.connect(cwd, { disableBroker: true });
+    const directClient = await CodexAppServerClient.connect(cwd, { ...clientOptions, disableBroker: true });
     try {
       return await fn(directClient);
     } finally {
@@ -1100,6 +1119,8 @@ export async function runAppServerTurn(cwd, options = {}) {
 
   return withAppServer(cwd, async (client) => {
     let threadId;
+    let selectedModel;
+    if (options.signal?.aborted) throw new Error("Codex task interrupted before startup.");
 
     if (options.resumeThreadId) {
       emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
@@ -1109,6 +1130,7 @@ export async function runAppServerTurn(cwd, options = {}) {
         ephemeral: false
       });
       threadId = response.thread.id;
+      selectedModel = response.model;
     } else {
       emitProgress(options.onProgress, "Starting Codex task thread.", "starting");
       const response = await startThread(client, cwd, {
@@ -1118,12 +1140,15 @@ export async function runAppServerTurn(cwd, options = {}) {
         threadName: options.persistThread ? options.threadName : options.threadName ?? null
       });
       threadId = response.thread.id;
+      selectedModel = response.model;
     }
 
     emitProgress(options.onProgress, `Thread ready (${threadId}).`, "starting", {
       threadId
     });
 
+    options.onReady?.({ threadId, model: selectedModel, appServerPid: client.proc?.pid ?? null });
+    if (options.signal?.aborted) throw new Error("Codex task interrupted before turn startup.");
     const prompt = options.prompt?.trim() || options.defaultPrompt || "";
     if (!prompt) {
       throw new Error("A prompt is required for this Codex run.");
@@ -1140,7 +1165,7 @@ export async function runAppServerTurn(cwd, options = {}) {
           effort: options.effort ?? null,
           outputSchema: options.outputSchema ?? null
         }),
-      { onProgress: options.onProgress }
+      { onProgress: options.onProgress, onNotification: options.onNotification, signal: options.signal }
     );
 
     return {
@@ -1150,13 +1175,14 @@ export async function runAppServerTurn(cwd, options = {}) {
       finalMessage: turnState.lastAgentMessage,
       reasoningSummary: turnState.reasoningSummary,
       turn: turnState.finalTurn,
-      error: turnState.error,
       stderr: cleanCodexStderr(client.stderr),
       fileChanges: turnState.fileChanges,
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
-      commandExecutions: turnState.commandExecutions
+      commandExecutions: turnState.commandExecutions,
+      turnStatus: turnState.finalTurn?.status ?? null,
+      error: turnState.error ?? turnState.finalTurn?.error ?? null
     };
-  });
+  }, options.clientOptions);
 }
 
 export async function findLatestTaskThread(cwd) {

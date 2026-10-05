@@ -7,6 +7,7 @@ const PANE = { component: 'Pane' as const, requestId: 'codex-native-activity', p
 function dependencies(on, agents = [{ id: 'native-agent', type: TYPE, description: 'Read README', status: 'running' }]) {
   on('agent.list', () => ({ value: agents }));
   on('session.messages', () => ({ value: [{ role: 'user', text: 'Read README.md' }] }));
+  on('session.id', () => ({ value: 'native-test-session' }));
   on('session.cwd', () => ({ value: '/tmp' }));
   on('ui.open', () => ({ value: { isPlaced: true } }));
 }
@@ -81,6 +82,20 @@ test('native response streams once, repeated model steps do not repeat execution
   }
 });
 
+test('a newly spawned worker has its activity row before its execution starts', async ($, on) => {
+  dependencies(on);
+  on('agent.spawn', () => ({ agentId: 'native-agent', model: 'unused' }));
+  on('ui.render', { component: 'ToolUse' }, ($, e) => h($.ui.resolve(e).Text, {}, 'Original Agent row'));
+  await $.agent.spawn({ subagentType: TYPE, prompt: 'Implement the fix.', description: 'Implement fix', tool_use_id: 'starting-tool',
+    provider: { plugin: 'codex-native-prototype', tier: 'user' }, parentModel: 'unused', background: true, fork: false });
+  const row = await $.ui.mount({ plugin: 'codex-native-prototype', surface: 'terminal', component: 'ToolUse', requestId: 'starting-tool',
+    props: { tool_use_id: 'starting-tool', tool: 'Agent', input: { subagent_type: TYPE, description: 'Implement fix', prompt: 'Implement the fix.' },
+      isRunning: true, isErrored: false, isInterrupted: false } });
+  expect(await row.find({ type: 'Text', text: 'Codex' })).toBeDefined();
+  expect(await row.find({ type: 'Text', text: 'starting' })).toBeDefined();
+  await row.unmount();
+});
+
 test('a failed bridge yields a visible error and never falls through to a Claude model', async ($, on) => {
   dependencies(on);
   on('process.spawn', async function* () {
@@ -122,4 +137,24 @@ test('the live Stop button addresses only its run and renders interrupted comple
   release();
   expect((await pending).text).toBe('Codex task interrupted.');
   await ui.unmount();
+});
+
+
+test('background Agent handles point to the saved Codex report, preserving launch feedback', async ($, on) => {
+  dependencies(on);
+  on('agent.spawn', () => ({ agentId: 'native-agent', model: 'unused' }));
+  on('process.run', ($, e) => {
+    expect(e.argv[2]).toBe('bind-output');
+    expect(e.argv[4]).toBe('/tmp/tasks/native-agent.output');
+    expect(e.argv[5]).toBe('native-agent');
+    return { value: { exitCode: 0, stdout: '{"bound":true}', stderr: '' } };
+  });
+  on('tool.call', { tool: 'Agent' }, () => ({ result: { isAsync: true, agentId: 'native-agent', outputFile: '/tmp/tasks/native-agent.output', description: 'Implement fix' } }));
+  await $.agent.spawn({ subagentType: TYPE, prompt: 'Implement the fix.', description: 'Implement fix', tool_use_id: 'report-tool',
+    provider: { plugin: 'codex-native-prototype', tier: 'user' }, parentModel: 'unused', background: true, fork: false });
+  const launched = await $.tool.call({ tool: 'Agent', tool_use_id: 'report-tool', subagent_type: TYPE, prompt: 'Implement the fix.', description: 'Implement fix' });
+  expect(launched.result.outputFile).toBe('/tmp/tasks/native-agent.output');
+  expect(launched.result.agentId).toBe('native-agent');
+  expect(launched.result.description).toBe('Implement fix');
+
 });

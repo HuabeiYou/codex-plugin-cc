@@ -11,7 +11,7 @@ import { installFakeCodex, buildEnv } from '../tests/fake-codex-fixture.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const real = process.argv.includes('--real');
 const bundled = process.argv.includes('--bundle');
-const pluginRoot = path.join(root, bundled ? 'output/codex-local-marketplace/plugins/codex' : 'plugins/codex-native-prototype');
+const pluginRoot = process.env.CODEX_NATIVE_ACCEPTANCE_PLUGIN_ROOT || path.join(root, bundled ? 'output/codex-local-marketplace/plugins/codex' : 'plugins/codex-native-prototype');
 const pluginName = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.claude-plugin/plugin.json'))).name;
 if (process.argv.slice(2).some((arg) => !['--real', '--bundle'].includes(arg))) throw new Error('Usage: native-prototype-acceptance.mjs [--real] [--bundle]');
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-acceptance-'));
@@ -22,7 +22,7 @@ function execute(env) {
     const child = spawn('claude', ['-p', 'Run native acceptance', '--max-turns', '2',
       '--plugin-dir', pluginRoot,
       '--plugin-dir', path.join(root, 'tests/fixtures/native-agent-driver'), '--output-format', 'json'],
-    { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    { cwd: env.CODEX_NATIVE_ACCEPTANCE_CWD || root, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     const timeout = setTimeout(() => { child.kill('SIGTERM'); reject(new Error('Claude acceptance exceeded 90 seconds.')); }, 90_000);
     child.stdout.on('data', (data) => { stdout += data; });
@@ -41,16 +41,20 @@ function alive(pid) {
 }
 
 try {
-  for (const cancel of [false, true]) {
-    const bin = path.join(directory, cancel ? 'cancel' : 'complete');
+  for (const scenario of [{ cancel: false, background: false }, { cancel: false, background: true }, { cancel: true, background: true }]) {
+    const { cancel, background } = scenario;
+    const bin = path.join(directory, cancel ? 'cancel' : background ? 'background' : 'complete');
     fs.mkdirSync(bin);
-    if (!real) installFakeCodex(bin, cancel ? 'interruptible-slow-task' : 'native-stream-task');
+    if (!real) installFakeCodex(bin, cancel ? 'interruptible-slow-task' : 'native-edit-task');
     const env = { ...(real ? process.env : buildEnv(bin)),
       CODEX_NATIVE_ACCEPTANCE_CANCEL: cancel ? '1' : '0',
+      CODEX_NATIVE_ACCEPTANCE_BACKGROUND: background ? '1' : '0',
       CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE: `${pluginName}:worker`,
-      CODEX_NATIVE_ACCEPTANCE_TASK: cancel
+      CLAUDE_PLUGIN_DATA: path.join(directory, 'plugin-data'),
+      CODEX_NATIVE_ACCEPTANCE_TASK: JSON.stringify({ write: real ? false : true, task: cancel
         ? 'Perform a thorough read-only review of this repository. Inspect implementation and tests; report architecture and integration issues in detail. Do not edit files.'
-        : 'Read README.md and describe this repository in one sentence. Do not edit anything.' };
+        : real ? 'Read README.md and describe this repository in one sentence. Do not edit anything.' : 'Implement a test change in the isolated acceptance workspace.' }) };
+    if (!real) { env.CODEX_NATIVE_ACCEPTANCE_CWD = path.join(directory, cancel ? 'cancel-workspace' : background ? 'background-workspace' : 'edit-workspace'); fs.mkdirSync(env.CODEX_NATIVE_ACCEPTANCE_CWD); }
     const startedAt = Date.now();
     const response = await execute(env);
     const wallMs = Date.now() - startedAt;
@@ -69,10 +73,16 @@ try {
       assert.equal(detail.child?.isAborted, true);
     } else {
       assert.equal(lifecycle.completed, 1);
-      assert.equal(lifecycle.requested.foreground, 1);
+      assert.equal(background ? lifecycle.started_in_background : lifecycle.requested.foreground, 1);
       assert.equal(detail.child?.reason, 'answer');
       assert.ok(detail.child.answer.length > 0);
+      if (background) { assert.equal(detail.feedback?.isError, false, detail.feedback?.text); assert.ok(detail.feedback?.text?.length > 0); if (!real) assert.ok(detail.feedback.text.includes('Read-only answer.')); }
       assert.equal(detail.bridgeEvents.find((event) => event.kind === 'result')?.status, 'completed');
+      if (!real) {
+        assert.equal(ready.sandbox, 'workspace-write');
+        assert.ok(detail.bridgeEvents.some((e) => e.type === 'fileChange'));
+        assert.equal(fs.readFileSync(path.join(env.CODEX_NATIVE_ACCEPTANCE_CWD, 'native-edit-proof.txt'), 'utf8'), 'edited by simulated Codex');
+      }
     }
     for (let attempts = 0; attempts < 20 && alive(ready.appServerPid); attempts++) await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(alive(ready.appServerPid), false, 'Codex app-server must not survive agent completion/TaskStop');
@@ -80,10 +90,10 @@ try {
       const state = JSON.parse(fs.readFileSync(path.join(bin, 'fake-codex-state.json')));
       assert.ok(state.lastInterrupt, 'TaskStop must reach Codex turn/interrupt');
     }
-    reports.push({ mode: real ? 'REAL' : 'SIMULATED_CODEX_REAL_CLAUDE_LIFECYCLE', scenario: cancel ? 'task-stop' : 'foreground-completion',
+    reports.push({ mode: real ? 'REAL' : 'SIMULATED_CODEX_REAL_CLAUDE_LIFECYCLE', scenario: cancel ? 'task-stop' : background ? 'background-completion-feedback' : real ? 'foreground-completion' : 'implementation-completion',
       plugin: pluginName, sessionId: response.session_id, agentId: detail.agentId ?? detail.child.agentId, threadId: ready.threadId,
       model: ready.model ?? null, appServerPid: ready.appServerPid, appServerAlive: false,
-      claudeModelCalls: 0, wallMs, cliReportedDurationMs: response.duration_ms, lifecycle });
+      claudeModelCalls: 0, parentReadReport: background && !cancel ? detail.feedback?.isError === false : null, wallMs, cliReportedDurationMs: response.duration_ms, lifecycle });
   }
   console.log(JSON.stringify({ passed: true, reports }, null, 2));
 } finally { fs.rmSync(directory, { recursive: true, force: true }); }

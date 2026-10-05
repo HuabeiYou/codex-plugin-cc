@@ -490,6 +490,10 @@ async function executeTaskRun(request) {
     effort: request.effort,
     sandbox: request.write ? "workspace-write" : "read-only",
     onProgress: request.onProgress,
+    signal: request.signal,
+    onReady: request.onReady,
+    onNotification: request.onNotification,
+    clientOptions: request.clientOptions,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
   });
@@ -512,12 +516,15 @@ async function executeTaskRun(request) {
     status: result.status,
     threadId: result.threadId,
     rawOutput,
+    turnStatus: result.turnStatus,
+    error: result.error?.message ?? null,
     touchedFiles: result.touchedFiles,
     reasoningSummary: result.reasoningSummary
   };
 
   return {
     exitStatus: result.status,
+    cancelled: result.turnStatus === "interrupted",
     threadId: result.threadId,
     turnId: result.turnId,
     payload,
@@ -527,6 +534,22 @@ async function executeTaskRun(request) {
     jobClass: "task",
     write: Boolean(request.write)
   };
+}
+
+// Native Claude agents use the same tracked task, persistence, prompt and sandbox
+// path as rescue. Claude owns foreground/background execution outside this API.
+export async function executeNativeTask(request) {
+  const workspaceRoot = resolveWorkspaceRoot(request.cwd);
+  const model = normalizeRequestedModel(request.model);
+  const effort = normalizeReasoningEffort(request.effort);
+  requireTaskRequest(request.prompt, request.resumeLast);
+  const metadata = buildTaskRunMetadata(request);
+  const job = buildTaskJob(workspaceRoot, metadata, request.write !== false);
+  const { logFile, progress } = createTrackedProgress(job);
+  return runTrackedJob(job, () => executeTaskRun({ ...request, model, effort,
+    write: request.write !== false, jobId: job.id,
+    onProgress: (event) => { progress?.(event); request.onProgress?.(event); }
+  }).then((execution) => ({ ...execution, jobId: job.id })), { logFile, signal: request.signal });
 }
 
 function buildReviewJobMetadata(reviewName, target) {
@@ -1070,7 +1093,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;
