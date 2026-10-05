@@ -2,6 +2,8 @@
 
 Claude owns the subagent lifecycle; the real Codex harness executes its task. This separate Mod addresses the official plugin's opaque background jobs with native Agent identity, streamed answers, a live activity pane, and cancellation. It is experimental and read-only.
 
+For one installed Codex plugin, use the [single-plugin replacement guide](../../SINGLE-PLUGIN.md). The separate directories below remain the development setup.
+
 ## Try it
 
 Tested with Claude Code **2.1.289**, Codex **0.160.0**, and Node **24.16.0**. Both CLIs must be installed and authenticated. Run from this repository:

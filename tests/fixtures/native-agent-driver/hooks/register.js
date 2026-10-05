@@ -8,7 +8,7 @@ let cancelMode = false;
 let stopped = null;
 export function register(on) {
   on('process.spawn', async function* ($, e, next) {
-    if (!e.argv.some((arg) => arg.endsWith('/codex-native-prototype/scripts/bridge.mjs'))) return yield* next(e);
+    if (!e.argv.some((arg) => arg.endsWith('/codex-native-prototype/scripts/bridge.mjs') || arg.endsWith('/scripts/native-bridge.mjs'))) return yield* next(e);
     let buffer = '';
     const stream = next(e);
     while (true) {
@@ -46,7 +46,7 @@ export function register(on) {
     if (steps === 1) {
       const task = await $.env.get('CODEX_NATIVE_ACCEPTANCE_TASK') || 'Read README.md and describe this repository in one sentence. Do not edit anything.';
       cancelMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_CANCEL') === '1';
-      const input = { subagent_type: 'codex-native-prototype:worker', description: 'Native acceptance', prompt: task, run_in_background: cancelMode };
+      const input = { subagent_type: await $.env.get('CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE') || 'codex-native-prototype:worker', description: 'Native acceptance', prompt: task, run_in_background: cancelMode };
       yield { kind: 'tool', index: 0, id: 'native_acceptance_agent', name: 'Agent' };
       yield { kind: 'input', index: 0, json: JSON.stringify(input) };
       yield { kind: 'stop', stopReason: 'tool_use', usage: null };

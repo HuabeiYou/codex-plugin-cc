@@ -10,14 +10,17 @@ import { installFakeCodex, buildEnv } from '../tests/fake-codex-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const real = process.argv.includes('--real');
-if (process.argv.slice(2).some((arg) => arg !== '--real')) throw new Error('Usage: native-prototype-acceptance.mjs [--real]');
+const bundled = process.argv.includes('--bundle');
+const pluginRoot = path.join(root, bundled ? 'output/codex-local-marketplace/plugins/codex' : 'plugins/codex-native-prototype');
+const pluginName = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.claude-plugin/plugin.json'))).name;
+if (process.argv.slice(2).some((arg) => !['--real', '--bundle'].includes(arg))) throw new Error('Usage: native-prototype-acceptance.mjs [--real] [--bundle]');
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-acceptance-'));
 const reports = [];
 
 function execute(env) {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', ['-p', 'Run native acceptance', '--max-turns', '2',
-      '--plugin-dir', path.join(root, 'plugins/codex-native-prototype'),
+      '--plugin-dir', pluginRoot,
       '--plugin-dir', path.join(root, 'tests/fixtures/native-agent-driver'), '--output-format', 'json'],
     { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
@@ -44,6 +47,7 @@ try {
     if (!real) installFakeCodex(bin, cancel ? 'interruptible-slow-task' : 'native-stream-task');
     const env = { ...(real ? process.env : buildEnv(bin)),
       CODEX_NATIVE_ACCEPTANCE_CANCEL: cancel ? '1' : '0',
+      CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE: `${pluginName}:worker`,
       CODEX_NATIVE_ACCEPTANCE_TASK: cancel
         ? 'Perform a thorough read-only review of this repository. Inspect implementation and tests; report architecture and integration issues in detail. Do not edit files.'
         : 'Read README.md and describe this repository in one sentence. Do not edit anything.' };
@@ -77,7 +81,7 @@ try {
       assert.ok(state.lastInterrupt, 'TaskStop must reach Codex turn/interrupt');
     }
     reports.push({ mode: real ? 'REAL' : 'SIMULATED_CODEX_REAL_CLAUDE_LIFECYCLE', scenario: cancel ? 'task-stop' : 'foreground-completion',
-      sessionId: response.session_id, agentId: detail.agentId ?? detail.child.agentId, threadId: ready.threadId,
+      plugin: pluginName, sessionId: response.session_id, agentId: detail.agentId ?? detail.child.agentId, threadId: ready.threadId,
       model: ready.model ?? null, appServerPid: ready.appServerPid, appServerAlive: false,
       claudeModelCalls: 0, wallMs, cliReportedDurationMs: response.duration_ms, lifecycle });
   }

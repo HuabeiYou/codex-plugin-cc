@@ -1,3 +1,5 @@
+> For the fork's single-plugin field test, see [Replace the official plugin](SINGLE-PLUGIN.md).
+
 # Codex plugin for Claude Code
 
 Use Codex from inside Claude Code for code reviews or to delegate tasks to Codex.

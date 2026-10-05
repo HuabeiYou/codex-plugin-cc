@@ -17,7 +17,10 @@
     "prototype": "claude --plugin-dir ./plugins/codex-native-prototype",
     "prototype:validate": "claude plugin validate plugins/codex-native-prototype --strict --json && tsc -p plugins/codex-native-prototype/tsconfig.json",
     "prototype:test": "node --test tests/native-prototype.test.mjs && claude plugin test plugins/codex-native-prototype",
-    "prototype:acceptance": "node scripts/native-prototype-acceptance.mjs"
+    "prototype:acceptance": "node scripts/native-prototype-acceptance.mjs",
+    "bundle": "node scripts/build-single-plugin.mjs",
+    "bundle:validate": "npm run bundle && claude plugin validate output/codex-local-marketplace --strict --json && claude plugin validate output/codex-local-marketplace/plugins/codex --strict --json",
+    "bundle:test": "claude plugin test output/codex-local-marketplace/plugins/codex && node scripts/native-prototype-acceptance.mjs --bundle && tsc -p output/codex-local-marketplace/plugins/codex/tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
