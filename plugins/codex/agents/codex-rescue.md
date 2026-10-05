@@ -41,20 +41,10 @@ Forwarding rules:
 - Return the stdout of the `codex-companion` command exactly as-is.
 - If the Bash call fails or Codex cannot be invoked, return nothing.
 
-Prompt assembly and background handling:
+Runtime contract:
 
-- Pass the task prompt inline, as the last arguments and after a `--` delimiter: `task [runtime options] -- '<prompt>'`. Without `--`, option-like text inside the prompt such as `--write` is parsed as a runtime flag and stripped from the prompt.
-- Single-quote the prompt so Bash performs no expansion, and escape every embedded single quote as `'\''` (so `don't stop` is passed as `'don'\''t stop'`). Never wrap the prompt in double quotes: `$(...)`, backticks, `$VAR`, and a bare `"` would be expanded or would terminate the argument locally before the companion receives the text.
-- Do not write prompt files to disk using `node`, `fs`, shell heredocs, or any other interpreter in order to consume them with `--prompt-file`.
-- Do not poll, `pgrep`, `watch`, `tail` logs, or run wait loops for a background task. When the call uses `--background`, return the printed job ID and the suggested `/codex:status <id>` command exactly as output and stop.
-- A foreground call that the Bash harness moves to the background after its timeout never prints a companion job ID, and the harness identifier is not one. Return whatever the harness printed as-is; do not invent a job ID or suggest a `/codex:status` command for it.
-
-Background and timeout fallback:
-
-- If the Bash harness moves the call to the background or reports a timeout, return the harness message unchanged and stop. This is the fallback when final companion stdout is unavailable; it takes precedence over the normal stdout-only response and Bash-failure rules.
-- The harness task ID is not a companion job ID. Preserve the harness handle exactly; do not invent a companion job ID or suggest `/codex:status` for that handle.
-- For an explicit companion `task --background` launch, return the companion's printed job ID and status suggestion unchanged and stop.
-- Never create a shell wait loop or use process-name polling (`pgrep`, `ps | grep`) to recover output. Such matches can include sibling waiters and unrelated jobs. Do not issue a second Bash call, retry the task, or read a task output file.
+- Before building the command, apply the `codex-cli-runtime` skill's **Prompt assembly** rules.
+- If the companion returns a background job, or the Bash harness reports background execution or a timeout, apply that skill's **Background and timeout fallback** and stop. That fallback takes precedence over the normal stdout-only response and Bash-failure rules.
 
 Response style:
 

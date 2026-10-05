@@ -187,23 +187,19 @@ test("transfer, result, and cancel commands are exposed as deterministic runtime
   assert.match(resultHandling, /if Codex was never successfully invoked, do not generate a substitute answer at all/i);
 });
 
-test("rescue agent forbids unsafe prompt writes, wait loops, and harness job-ID assumptions", () => {
+test("rescue agent points to the shared prompt and background contract", () => {
   const agent = read("agents/codex-rescue.md");
   const runtimeSkill = read("skills/codex-cli-runtime/SKILL.md");
 
-  assert.match(agent, /Do not write prompt files to disk/i);
-  assert.match(agent, /node[^\n]*fs/i);
-  assert.match(agent, /Do not poll.*pgrep/i);
-  assert.match(agent, /return the printed job ID/i);
-  assert.match(agent, /task \[runtime options\] -- '<prompt>'/);
-  assert.match(agent, /escape every embedded single quote as `'\\''`.*Never wrap the prompt in double quotes/i);
-  assert.match(agent, /do not invent a job ID or suggest a `\/codex:status` command for it/i);
+  assert.match(agent, /Before building the command, apply the `codex-cli-runtime` skill's \*\*Prompt assembly\*\* rules/);
+  assert.match(agent, /\*\*Background and timeout fallback\*\* and stop/);
+  assert.doesNotMatch(agent, /escape every embedded single quote/);
   assert.match(runtimeSkill, /Do not write prompt files to disk/i);
-  assert.match(runtimeSkill, /Do not poll.*pgrep/i);
-  assert.match(runtimeSkill, /return the job ID and suggested/i);
   assert.match(runtimeSkill, /task \[runtime options\] -- '<prompt>'/);
-  assert.match(runtimeSkill, /escape every embedded single quote as `'\\''`.*Never wrap the prompt in double quotes/i);
-  assert.match(runtimeSkill, /do not invent a job ID or suggest a `\/codex:status` command for it/i);
+  assert.match(runtimeSkill, /Single-quote the prompt so Bash performs no expansion/i);
+  assert.match(runtimeSkill, /escape every embedded single quote/);
+  assert.match(runtimeSkill, /Never wrap the prompt in double quotes/i);
+  assert.match(runtimeSkill, /only wants review, diagnosis, or research without edits/i);
 });
 
 test("internal docs use task terminology for rescue runs", () => {
@@ -211,7 +207,7 @@ test("internal docs use task terminology for rescue runs", () => {
   const promptingSkill = read("skills/gpt-5-4-prompting/SKILL.md");
   const promptRecipes = read("skills/gpt-5-4-prompting/references/codex-prompt-recipes.md");
 
-  assert.match(runtimeSkill, /codex-companion\.mjs" task "<raw arguments>"/);
+  assert.match(runtimeSkill, /codex-companion\.mjs" task \[runtime options\] -- '<prompt>'/);
   assert.match(runtimeSkill, /Use `task` for every rescue request/i);
   assert.match(runtimeSkill, /task --resume-last/i);
   assert.match(promptingSkill, /Use `task` when the task is diagnosis/i);
@@ -244,16 +240,18 @@ test("setup command can offer Codex install and still points users to codex logi
 });
 
 test("rescue contracts stop after Bash auto-backgrounding instead of inventing process waiters", () => {
-  for (const source of [read("agents/codex-rescue.md"), read("skills/codex-cli-runtime/SKILL.md")]) {
-    assert.match(source, /If the Bash harness moves the call to the background or reports a timeout/i);
-    assert.match(source, /return the harness message unchanged and stop/i);
-    assert.match(source, /harness task ID is not a companion job ID/i);
-    assert.match(source, /Never create a shell wait loop or use process-name polling.*pgrep/i);
-    assert.match(source, /exactly one `Bash` call|invoke `task` once/i);
-  }
+  const source = read("skills/codex-cli-runtime/SKILL.md");
+  assert.match(source, /If the Bash harness moves the call to the background or reports a timeout/i);
+  assert.match(source, /return the harness message unchanged and stop/i);
+  assert.match(source, /harness task ID is not a companion job ID/i);
+  assert.match(source, /Never create a shell wait loop or use process-name polling.*pgrep/i);
+  assert.match(source, /invoke `task` once/i);
+  assert.match(read("agents/codex-rescue.md"), /fallback takes precedence over the normal stdout-only response and Bash-failure rules/i);
   const rescue = read("commands/rescue.md");
   assert.match(rescue, /return that message unchanged and stop/i);
   assert.match(rescue, /harness task ID is not a companion job ID/i);
+  assert.match(rescue, /list jobs with `\/codex:status` and confirm the matching companion job ID/i);
+  assert.match(rescue, /If the matching job is unclear, use `AskUserQuestion`/i);
   assert.match(rescue, /Never create a shell wait loop or use process-name polling.*pgrep/i);
 });
 
@@ -261,6 +259,6 @@ test("status waiting uses a companion job ID and a bounded runtime call", () => 
   const status = read("commands/status.md");
   assert.match(status, /status <job-id> --wait --timeout-ms 30000/i);
   assert.match(status, /harness task ID is not a companion job ID/i);
-  assert.match(status, /Return the snapshot when the bounded wait ends/i);
+  assert.match(status, /Present the returned snapshot when the bounded wait ends/i);
   assert.match(status, /Never create a shell wait loop or use process-name polling.*pgrep/i);
 });

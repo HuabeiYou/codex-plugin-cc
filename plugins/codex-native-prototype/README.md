@@ -28,6 +28,22 @@ Run it in the foreground and summarize its findings.
 
 Claude chooses delegation in this path, so the parent uses Claude inference as usual. Only the designated worker's model step is replaced by Codex. Ordinary Claude agents pass through unchanged.
 
+## Trial with the patched official plugin
+
+This fork includes upstream [PR #692](https://github.com/openai/codex-plugin-cc/pull/692) at `36ff14a`, our timeout fallback, and companion job discovery guidance. The rescue agent follows one shared prompt and background contract. The native Mod continues to use its own bridge.
+
+To load both local plugins for a new Claude session, run from this repository:
+
+```bash
+claude --plugin-dir ./plugins/codex --plugin-dir ./plugins/codex-native-prototype
+```
+
+Use `/codex-native` for the native Mod. Use `/codex:rescue` for the patched official forwarding agent. Both plugin directories must stay in this repository layout.
+
+After a rescue background or timeout message, the forwarding agent returns that message and stops. For a later status check, use `/codex:status` to find the matching companion job, then `/codex:status <job-id> --wait --timeout-ms 30000`. Use the saved companion job ID. Claude's task handle identifies a different task. A running snapshot after the timeout means the job is still active.
+
+Evaluate this revision through normal use for a few days. If a wait remains stuck, retain the command, returned message, selected job ID, and status snapshot so the failure can be traced. Automated instruction and runtime checks do not establish that Claude always follows the instructions. This trial does not change installed plugins or global settings.
+
 ## How it works
 
 ```mermaid

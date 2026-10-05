@@ -17,6 +17,6 @@ If the user did pass a job ID:
 - Do not summarize or condense it.
 
 Waiting for a job:
-- Use `/codex:status <job-id> --wait --timeout-ms 30000` with a companion job ID printed by the runtime. The harness task ID is not a companion job ID.
-- Return the snapshot when the bounded wait ends, including an active/timed-out snapshot. A timeout is not completion; a later explicit wait can use the same job ID.
-- Never create a shell wait loop or use process-name polling (`pgrep`, `ps | grep`) around this command. The runtime waits on the selected job's stored state, independent of unrelated jobs or waiting shells.
+- To request a bounded wait, invoke `/codex:status <job-id> --wait --timeout-ms 30000` with a companion job ID from the runtime output or `/codex:status` job list. The harness task ID is not a companion job ID.
+- This command executes before these presentation instructions are read. Present the returned snapshot when the bounded wait ends. An active status after a timeout is not completion; a later explicit wait can use the same job ID.
+- The runtime waits on the selected job's stored state, independent of unrelated jobs or waiting shells. Use its bounded wait directly; never create a shell wait loop or use process-name polling (`pgrep`, `ps | grep`) around this command.

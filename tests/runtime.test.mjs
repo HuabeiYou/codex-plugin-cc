@@ -2258,7 +2258,7 @@ test("setup and status honor --cwd when reading shared session runtime", () => {
   assert.equal(payload.sessionRuntime.endpoint, "unix:/tmp/fake-broker.sock");
 });
 
-test("status --wait resolves only the selected terminal job while another session is running", () => {
+test("status --wait resolves only the selected terminal job while another job is recorded running", () => {
   const workspace = makeTempDir();
   const stateDir = resolveStateDir(workspace);
   fs.mkdirSync(stateDir, { recursive: true });
