@@ -35,6 +35,13 @@ Command selection:
 - `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
+Prompt and background handling:
+- Pass the prompt inline, as the last arguments and after a `--` delimiter: `task [runtime options] -- '<prompt>'`. Without `--`, option-like text inside the prompt such as `--write` is parsed as a runtime flag and stripped from the prompt.
+- Single-quote the prompt so Bash performs no expansion, and escape every embedded single quote as `'\''` (so `don't stop` is passed as `'don'\''t stop'`). Never wrap the prompt in double quotes: `$(...)`, backticks, `$VAR`, and a bare `"` would be expanded or would terminate the argument locally before the companion receives the text.
+- Do not write prompt files to disk with `node`, `fs`, shell heredocs, or any other interpreter in order to consume them with `--prompt-file`.
+- Do not poll, `pgrep`, `watch`, `tail` logs, or run wait loops for a background task. When `task` is invoked with `--background`, return the job ID and suggested `/codex:status <id>` command exactly as output and stop.
+- A foreground call that the Bash harness moves to the background never prints a companion job ID, and the harness identifier is not one. Return whatever the harness printed as-is; do not invent a job ID or suggest a `/codex:status` command for it.
+
 Background and timeout fallback:
 
 - If the Bash harness moves the call to the background or reports a timeout, return the harness message unchanged and stop. This is the fallback when final companion stdout is unavailable; it takes precedence over the normal stdout-only response and Bash-failure rules.
@@ -43,7 +50,7 @@ Background and timeout fallback:
 - Never create a shell wait loop or use process-name polling (`pgrep`, `ps | grep`) to recover output. Such matches can include sibling waiters and unrelated jobs. Do not issue a second Bash call, retry the task, or read a task output file.
 
 Safety rules:
-- Default to write-capable Codex work in `codex:codex-rescue` unless the user explicitly asks for read-only behavior.
+- Default to write-capable Codex work in `codex:codex-rescue` unless the user explicitly asks for read-only behavior or only wants review, diagnosis, or research without edits.
 - Preserve the user's task text as-is apart from stripping routing flags.
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.
