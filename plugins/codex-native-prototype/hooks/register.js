@@ -1,5 +1,5 @@
 // Claude manages the Agent; the shared rescue runtime executes its task.
-import { createRun, acceptEvent, readEvents, finalAnswer } from './protocol.mjs';
+import { createRun, acceptEvent, readEvents, finalAnswer, displayText } from './protocol.mjs';
 
 const runs = new Map();
 const spawnRows = new Map();
@@ -54,14 +54,14 @@ function renderActivity($, e, selectedRuns) {
   const { Box, Text, Button } = $.ui.resolve(e);
   return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column', gap: 1 }, ...selectedRuns.map((run) =>
     h(Box, { key: run.id, flexDirection: 'column' },
-      h(Text, { bold: true, wrap: 'truncate-end' }, `Codex${run.model ? ' (' + run.model + ')' : ''} · ${run.description} · ${run.status}`),
-      h(Text, { dimColor: true, wrap: 'truncate-end' }, `Agent ${run.agentId} · Thread ${run.threadId || 'starting'}`),
+      h(Text, { bold: true, wrap: 'truncate-end' }, displayText(`Codex${run.model ? ' (' + run.model + ')' : ''} · ${run.description} · ${run.status}`)),
+      h(Text, { dimColor: true, wrap: 'truncate-end' }, displayText(`Agent ${run.agentId} · Thread ${run.threadId || 'starting'}`)),
       ...run.activity.slice(expandedActivity ? -20 : -8).map((activity, i) => {
-        const text = activityText(run, activity) || '';
+        const text = displayText(activityText(run, activity));
         return h(Text, { key: `${run.id}-${i}`, dimColor: true, wrap: expandedActivity ? 'wrap' : 'truncate-end' },
           expandedActivity ? text : text.replace(/\s+/g, ' '));
       }),
-      ...(run.error && run.status !== 'interrupted' ? [h(Text, { color: 'red' }, run.error)] : []),
+      ...(run.error && run.status !== 'interrupted' ? [h(Text, { color: 'red' }, displayText(run.error))] : []),
       h(Button, { key: 'expand-activity', label: expandedActivity ? 'Compact activity' : 'Expand activity', onPress: () => {
         expandedActivity = !expandedActivity; $.ui.invalidate('ui.render');
       } }),
@@ -306,7 +306,7 @@ export function register(on) {
     return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column', gap: 1 },
       h(Text, { bold: true }, `${workers.length} Codex worker${workers.length === 1 ? '' : 's'}`),
       ...workers.slice(workerPage * WORKERS_PER_PAGE, (workerPage + 1) * WORKERS_PER_PAGE).map((run, i) => h(Button, { key: `select-${run.agentId}`, plain: true,
-        label: `${selected === run ? '› ' : '  '}${run.description.replace(/\s+/g, ' ').slice(0, 42)} · ${run.status}`,
+        label: `${selected === run ? '› ' : '  '}${displayText(run.description, 42).replace(/\s+/g, ' ')} · ${displayText(run.status, 32)}`,
         hotkey: String(i + 1),
         onPress: () => { selectedAgentId = run.agentId; expandedActivity = false; $.ui.invalidate('ui.render'); }
       })),

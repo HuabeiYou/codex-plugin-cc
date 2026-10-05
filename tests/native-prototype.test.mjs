@@ -9,9 +9,19 @@ import { randomUUID } from "node:crypto";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { makeTempDir } from "./helpers.mjs";
 import { runCodex, cancelRun, taskRequest, bindOutput } from "../plugins/codex-native-prototype/scripts/bridge.mjs";
-import { createRun, acceptEvent, readEvents } from "../plugins/codex-native-prototype/hooks/protocol.mjs";
+import { createRun, acceptEvent, readEvents, displayText } from "../plugins/codex-native-prototype/hooks/protocol.mjs";
 import { pluginEnvironment, publishPluginContext } from "../plugins/codex/scripts/lib/plugin-context.mjs";
 import { markReady, waitReady, readinessPath } from '../plugins/codex-native-prototype/scripts/native-ready-server.mjs';
+
+test('pane text removes terminal controls, preserves line breaks and bounds every text leaf', () => {
+  const output = '\u001b]0;terminal title\u0007\u001b[32mBuilding\u001b[0m\r\nDone\t✓\rNext\u0008\u0000\u007f';
+  assert.equal(displayText(output), 'Building\nDone\t✓\nNext');
+  assert.equal(displayText('\u001b]8;;https://example.com\u001b\\Link\u001b]8;;\u001b\\'), 'Link');
+  assert.equal(displayText('\u009b31mRed\u009b0m'), 'Red');
+  assert.equal(displayText('x'.repeat(10001)).length, 2400);
+  assert.equal(displayText('abcdef', 4), 'abc…');
+  assert.equal(displayText(null), '');
+});
 
 test('host readiness waits for the Mod and rejects another host generation or plugin', async () => {
   const root = makeTempDir();

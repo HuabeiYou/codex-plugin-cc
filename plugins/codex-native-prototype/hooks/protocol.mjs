@@ -1,4 +1,16 @@
 // Pure state/JSONL helpers, shared with the Node acceptance tests.
+export function displayText(value, limit = 2400) {
+  // Command output can contain terminal cursor/color controls. Claude refuses
+  // the whole render tree if a text leaf contains any control but tab/newline.
+  const text = String(value ?? '')
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\u001b[@-_]/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '');
+  return text.length > limit ? text.slice(0, limit - 1) + '…' : text;
+}
+
 export function createRun(agentId, description, id) {
   return { id, agentId, description, status: "starting", threadId: null, turnId: null, model: null,
     activity: [], answer: "", result: null, error: null, toolUseId: null };

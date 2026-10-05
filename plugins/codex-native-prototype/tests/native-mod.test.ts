@@ -112,6 +112,40 @@ test('launch leaves the parent Agent row unchanged', async ($, on) => {
   await row.unmount();
 });
 
+test('expanded activity stays rendered with terminal control characters during live updates', async ($, on) => {
+  dependencies(on);
+  let advance;
+  let entered;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { advance = resolve; });
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout', text: JSON.stringify({ kind: 'ready', threadId: 'controls-thread' }) + '\n' };
+    yield { stream: 'stdout', text: JSON.stringify({ kind: 'activity', label: 'Downloading 10%\rDownloading 20%', status: 'running' }) + '\n' };
+    entered();
+    await gate;
+    yield { stream: 'stdout', text: JSON.stringify({ kind: 'activity', label: '\u001b[32mBuild complete\u001b[0m\u0008', status: 'completed' }) + '\n' };
+    yield { stream: 'stdout', text: JSON.stringify({ kind: 'result', status: 'completed', answer: 'Done' }) + '\n' };
+    return { value: { code: 0, signal: null } };
+  });
+  const pending = collect($.turn.step(STEP));
+  await ready;
+  const ui = await $.ui.mount({ plugin: 'codex-native-prototype', surface: 'terminal', ...PANE });
+  const desktop = await $.ui.mount({ plugin: 'codex-native-prototype', surface: 'desktop', ...PANE });
+  try {
+    expect(await ui.find({ type: 'Text', text: 'controls-thread' })).toBeDefined();
+    await ui.press({ key: 'expand-activity' });
+    expect(await ui.find({ type: 'Text', text: 'Downloading 20%' })).toBeDefined();
+    advance();
+    await pending;
+    expect(await ui.find({ type: 'Text', text: 'Build complete' })).toBeDefined();
+    expect(await ui.find({ type: 'Button', text: 'Compact activity' })).toBeDefined();
+    expect(await desktop.find({ type: 'Text', text: 'Build complete' })).toBeDefined();
+    expect(await desktop.find({ type: 'Button', text: 'Compact activity' })).toBeDefined();
+    await ui.press({ key: 'expand-activity' });
+    expect(await ui.find({ type: 'Text', text: 'controls-thread' })).toBeDefined();
+  } finally { advance(); await pending; await ui.unmount(); await desktop.unmount(); }
+});
+
 test('multiple workers share a compact selector and show only the selected worker details', async ($, on) => {
   const agents = ['one', 'two'].map((id) => ({ id, type: TYPE, description: `Worker ${id}`, status: 'running' }));
   dependencies(on, agents);

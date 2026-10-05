@@ -1,3 +1,15 @@
+# Expanded activity rendering fix (2026-10-05)
+
+The `0.2.3` candidate is staged in `output/codex-pane-staging`. The reported worker's retained activity notices contain ANSI escape characters. Claude rejects the whole pane when a text leaf contains a terminal control character. Compact mode can hide a carriage return by collapsing whitespace; expanded mode previously passed it through. New activity changes the visible history, so the pane can alternate between a valid and a rejected tree.
+
+A real Claude Mod UI test reproduced the failure before the fix: `ui.render (Pane) refused: a text child holds a control character (an escape sequence)`. After the fix, expansion and subsequent live output remain visible on terminal and desktop test surfaces. The pane removes terminal escape sequences, normalizes carriage returns to line breaks, and bounds its text leaves. The original worker events and result stay intact.
+
+All nine Mod tests passed. A focused Node regression covers ANSI colors, terminal titles, hyperlink escapes, carriage returns, control bytes, readable Unicode, and length limits. The staging package passes strict marketplace/plugin validation and TypeScript checks. These are renderer tests rather than a visual soak of the user's active session.
+
+During staging, an unsupported destination argument briefly rebuilt the default bundle. It was immediately restored from the matching `0.2.1` staging copy; the final candidate uses a separate directory. Installation settings were not changed.
+
+---
+
 # Agents-view handoff fix (2026-10-05)
 
 The `0.2.2` candidate is staged in `output/codex-navigation-staging`, separately from the installed local marketplace. The user confirmed that pressing left arrow alone lost a running worker; there was no restart. That action checkpoints the child and adopts it into another Claude host session.
