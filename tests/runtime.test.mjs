@@ -2257,3 +2257,30 @@ test("setup and status honor --cwd when reading shared session runtime", () => {
   assert.equal(payload.sessionRuntime.mode, "shared");
   assert.equal(payload.sessionRuntime.endpoint, "unix:/tmp/fake-broker.sock");
 });
+
+test("status --wait resolves only the selected terminal job while another session is running", () => {
+  const workspace = makeTempDir();
+  const stateDir = resolveStateDir(workspace);
+  fs.mkdirSync(stateDir, { recursive: true });
+  try {
+    for (const status of ["completed", "failed", "cancelled"]) {
+      const selected = { id: "task-selected", status, title: "Selected task", jobClass: "task", sessionId: "session-selected" };
+      const unrelated = { id: "task-unrelated", status: "running", title: "Unrelated task", jobClass: "task", sessionId: "session-other" };
+      fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ version: 1, config: {}, jobs: [unrelated, selected] }));
+      const result = run("node", [SCRIPT, "status", selected.id, "--wait", "--timeout-ms", "25", "--json"], {
+        cwd: workspace, env: { ...process.env, CODEX_COMPANION_SESSION_ID: selected.sessionId }
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const snapshot = JSON.parse(result.stdout);
+      assert.equal(snapshot.job.id, selected.id);
+      assert.equal(snapshot.job.status, status);
+      assert.equal(snapshot.waitTimedOut, false);
+    }
+    const invalid = run("node", [SCRIPT, "status", "harness-id-not-a-companion-job", "--wait", "--timeout-ms", "25", "--json"], { cwd: workspace });
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /No job found/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

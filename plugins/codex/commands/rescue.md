@@ -40,6 +40,9 @@ Operating rules:
 
 - The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...` and return that command's stdout as-is.
 - Return the Codex companion stdout verbatim to the user.
+- If the subagent returns a Bash harness background/timeout message instead of final companion stdout, return that message unchanged and stop. This fallback takes precedence over the normal stdout-only response rule. The harness task ID is not a companion job ID; use Claude's native task controls for that handle, not `/codex:status`.
+- For a printed companion job ID, a later user-requested wait uses `/codex:status <job-id> --wait --timeout-ms 30000`. The wait is bounded and specific to that job.
+- Never create a shell wait loop or use process-name polling (`pgrep`, `ps | grep`) to wait for Codex or recover output; sibling waiters and unrelated jobs can match.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Do not ask the subagent to inspect files, monitor progress, poll `/codex:status`, fetch `/codex:result`, call `/codex:cancel`, summarize output, or do follow-up work of its own.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.

@@ -223,3 +223,25 @@ test("setup command can offer Codex install and still points users to codex logi
   assert.match(readme, /\/codex:setup --enable-review-gate/);
   assert.match(readme, /\/codex:setup --disable-review-gate/);
 });
+
+test("rescue contracts stop after Bash auto-backgrounding instead of inventing process waiters", () => {
+  for (const source of [read("agents/codex-rescue.md"), read("skills/codex-cli-runtime/SKILL.md")]) {
+    assert.match(source, /If the Bash harness moves the call to the background or reports a timeout/i);
+    assert.match(source, /return the harness message unchanged and stop/i);
+    assert.match(source, /harness task ID is not a companion job ID/i);
+    assert.match(source, /Never create a shell wait loop or use process-name polling.*pgrep/i);
+    assert.match(source, /exactly one `Bash` call|invoke `task` once/i);
+  }
+  const rescue = read("commands/rescue.md");
+  assert.match(rescue, /return that message unchanged and stop/i);
+  assert.match(rescue, /harness task ID is not a companion job ID/i);
+  assert.match(rescue, /Never create a shell wait loop or use process-name polling.*pgrep/i);
+});
+
+test("status waiting uses a companion job ID and a bounded runtime call", () => {
+  const status = read("commands/status.md");
+  assert.match(status, /status <job-id> --wait --timeout-ms 30000/i);
+  assert.match(status, /harness task ID is not a companion job ID/i);
+  assert.match(status, /Return the snapshot when the bounded wait ends/i);
+  assert.match(status, /Never create a shell wait loop or use process-name polling.*pgrep/i);
+});
