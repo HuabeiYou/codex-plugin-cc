@@ -7,6 +7,9 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { executeNativeTask } from "../../codex/scripts/codex-companion.mjs";
+import { pluginEnvironment } from "../../codex/scripts/lib/plugin-context.mjs";
+
+const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function controlDirectory(runId) {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(runId)) {
@@ -25,6 +28,7 @@ export function cancelRun(runId) {
 
 export function reportPath(runId, env = process.env) {
   controlDirectory(runId); // Validate the same per-agent identity.
+  env = pluginEnvironment(pluginRoot, env);
   return path.join(env.CLAUDE_PLUGIN_DATA || path.join(os.tmpdir(), 'codex-native-reports'), 'native-reports', `${runId}.txt`);
 }
 
@@ -81,14 +85,14 @@ export function taskRequest(prompt) {
     model: request.model, effort: request.effort };
 }
 
-async function execute(prompt, signal, emit) {
+async function execute(prompt, signal, emit, nativeRunId, resumeFrom) {
   const request = taskRequest(prompt);
   let threadId;
   const texts = new Map();
   const phases = new Map();
   const pending = new Map();
   const emitText = (itemId, text) => { if (text) emit({ kind: 'text', threadId, itemId, text }); };
-  const execution = await executeNativeTask({ ...request, cwd: process.cwd(), signal,
+  const execution = await executeNativeTask({ ...request, cwd: process.cwd(), signal, nativeRunId, resumeFrom,
     // One owned connection lets native cancellation close only this agent's harness.
     clientOptions: { disableBroker: true, capabilities: { experimentalApi: false, optOutNotificationMethods: ["item/reasoning/textDelta"] } },
     onReady: (ready) => { threadId = ready.threadId; emit({ kind: 'ready', ...ready, sandbox: request.write ? 'workspace-write' : 'read-only' }); },
@@ -130,10 +134,43 @@ async function execute(prompt, signal, emit) {
 
 export async function runCodex({ cwd, prompt, runId, signal, env = process.env, timeoutMs }, emit) {
   taskRequest(prompt);
+  env = pluginEnvironment(pluginRoot, env);
   const directory = controlDirectory(runId);
-  fs.mkdirSync(directory, { mode: 0o700 });
   const reportFile = reportPath(runId, env);
   fs.mkdirSync(path.dirname(reportFile), { recursive: true, mode: 0o700 });
+  const checkpointFile = reportFile + '.checkpoint.json';
+  const canonicalCwd = fs.realpathSync(cwd);
+  let checkpoint = { cwd: canonicalCwd, prompt };
+  let resumeFrom;
+  if (fs.existsSync(checkpointFile)) {
+    const inspect = () => JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
+    checkpoint = inspect();
+    if (checkpoint.cwd !== canonicalCwd) throw new Error('The native checkpoint belongs to a different workspace.');
+    // Wait for this run's old host to finish checkpoint cleanup before claiming
+    // its identity. A second attachment cannot execute work concurrently.
+    for (let attempt = 0; attempt < 50 && fs.existsSync(directory); attempt++) {
+      if (signal?.aborted) throw new Error('Native checkpoint recovery was interrupted.');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (fs.existsSync(directory)) throw new Error('The prior native run is still owned by another host.');
+    checkpoint = inspect();
+    if (checkpoint.result && checkpoint.result.status !== 'interrupted') return { ...checkpoint.result, reportFile };
+    if (!checkpoint.ready || checkpoint.result?.status !== 'interrupted') {
+      throw new Error('Native checkpoint stopped before its interrupted Codex thread was saved.');
+    }
+    resumeFrom = { jobId: checkpoint.ready.jobId, threadId: checkpoint.ready.threadId, sessionId: checkpoint.ready.sessionId };
+    const controls = taskRequest(checkpoint.prompt);
+    prompt = JSON.stringify({ task: 'Continue the interrupted task from this thread. Keep the original task scope and constraints.',
+      write: controls.write, model: controls.model || checkpoint.ready.model, effort: controls.effort });
+  }
+  fs.mkdirSync(directory, { mode: 0o700 });
+  const saveCheckpoint = () => {
+    const temporary = checkpointFile + '.' + process.pid + '.tmp';
+    fs.writeFileSync(temporary, JSON.stringify(checkpoint), { mode: 0o600 });
+    fs.renameSync(temporary, checkpointFile);
+  };
+  checkpoint.result = null;
+  saveCheckpoint();
   fs.writeFileSync(reportFile, 'Codex task starting.\n', { mode: 0o600 });
   let child;
   let stopRequested = signal?.aborted ?? false;
@@ -165,8 +202,9 @@ export async function runCodex({ cwd, prompt, runId, signal, env = process.env, 
             if (event.kind === 'result') result = event;
             else if (event.kind === 'error') stderr = event.message;
             else {
+              if (event.kind === 'ready') { checkpoint.ready = event; saveCheckpoint(); }
               if (event.kind === 'ready' && timeoutMs !== undefined) deadline = setTimeout(() => { deadlineExceeded = true; stop(); }, timeoutMs);
-              emit({ ...event, reportFile });
+              emit({ ...event, reportFile, ...(event.kind === 'ready' ? { pluginData: env.CLAUDE_PLUGIN_DATA } : {}) });
             }
           }
         } catch (error) { stop(); reject(error); }
@@ -180,14 +218,18 @@ export async function runCodex({ cwd, prompt, runId, signal, env = process.env, 
       });
     });
     // Protect against an early abort racing installation of the child's handlers.
-    child.stdin.end(JSON.stringify({ prompt }));
+    child.stdin.end(JSON.stringify({ prompt, nativeRunId: runId, resumeFrom }));
     if (stopRequested) stop();
     // No production task-duration cap. Tests may request a deadline explicitly.
     const completed = await finished;
+    checkpoint.result = completed;
+    saveCheckpoint();
     fs.writeFileSync(reportFile, `Codex task ${completed.status}\n\n${completed.answer || completed.error || ''}\n`, { mode: 0o600 });
     publishReport(runId, env);
     return { ...completed, reportFile };
   } catch (error) {
+    checkpoint.result = { status: 'failed', answer: '', error: error.message };
+    saveCheckpoint();
     fs.writeFileSync(reportFile, `Codex task failed\n\n${error.message}\n`, { mode: 0o600 });
     publishReport(runId, env);
     throw error;
@@ -201,8 +243,18 @@ export async function runCodex({ cwd, prompt, runId, signal, env = process.env, 
 async function main() {
   const [command, runId] = process.argv.slice(2);
   if (command === 'bind-output') { console.log(JSON.stringify(bindOutput(runId, process.argv[4], process.argv[5]))); return; }
-  if (command === 'report-path') { console.log(JSON.stringify({ reportFile: reportPath(runId) })); return; }
-  if (command === 'cancel') { console.log(JSON.stringify(cancelRun(runId))); return; }
+  if (command === 'report-path') {
+    const reportFile = reportPath(runId);
+    console.log(JSON.stringify({ reportFile, pluginData: path.dirname(path.dirname(reportFile)) })); return;
+  }
+  if (command === 'cancel') {
+    const result = cancelRun(runId);
+    if (result.requested && process.argv[4] === '--wait') {
+      for (let attempt = 0; attempt < 70 && fs.existsSync(controlDirectory(runId)); attempt++) await new Promise((resolve) => setTimeout(resolve, 100));
+      result.finished = !fs.existsSync(controlDirectory(runId));
+    }
+    console.log(JSON.stringify(result)); return;
+  }
   if (command !== 'run' && command !== 'execute') throw new Error('Usage: bridge.mjs run|cancel <run-id>');
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -211,12 +263,12 @@ async function main() {
   const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
   try {
     const request = JSON.parse(fs.readFileSync(0, 'utf8'));
-    const result = command === 'execute' ? await execute(request.prompt, controller.signal, emit)
+    const result = command === 'execute' ? await execute(request.prompt, controller.signal, emit, request.nativeRunId, request.resumeFrom)
       : await runCodex({ cwd: process.cwd(), prompt: request.prompt, runId, signal: controller.signal }, emit);
     emit({ kind: 'result', ...result });
     process.exitCode = result.status === 'completed' ? 0 : result.status === 'interrupted' ? 130 : 1;
   } finally { process.off('SIGTERM', stop); process.off('SIGINT', stop); }
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => { process.stdout.write(`${JSON.stringify({ kind: 'error', message: error.message })}\n`); process.exitCode = 1; });
 }

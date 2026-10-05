@@ -151,3 +151,5 @@ plugins/codex/.generated/
 plugins/codex-native-prototype/.claude-plugin/types/
 tests/fixtures/native-agent-driver/.claude-plugin/types/
 tests/fixtures/native-agent-driver/tsconfig.json
+tests/fixtures/native-navigation-driver/.claude-plugin/types/
+tests/fixtures/native-navigation-driver/tsconfig.json

@@ -2,6 +2,9 @@
 
 import fs from "node:fs";
 import process from "node:process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { publishPluginContext } from "./lib/plugin-context.mjs";
 
 import { terminateProcessTree } from "./lib/process.mjs";
 import { BROKER_ENDPOINT_ENV } from "./lib/app-server.mjs";
@@ -51,7 +54,9 @@ function cleanupSessionJobs(cwd, sessionId) {
   }
 
   const state = loadState(workspaceRoot);
-  const removedJobs = state.jobs.filter((job) => job.sessionId === sessionId);
+  // Native jobs belong to Claude's child lifecycle and can be carried into a
+  // new session by the agents view. Its checkpoint must retain their records.
+  const removedJobs = state.jobs.filter((job) => job.sessionId === sessionId && !job.nativeRunId);
   if (removedJobs.length === 0) {
     return;
   }
@@ -70,11 +75,13 @@ function cleanupSessionJobs(cwd, sessionId) {
 
   saveState(workspaceRoot, {
     ...state,
-    jobs: state.jobs.filter((job) => job.sessionId !== sessionId)
+    jobs: state.jobs.filter((job) => !removedJobs.some((removed) => removed.id === job.id))
   });
 }
 
 function handleSessionStart(input) {
+  publishPluginContext(process.env.CLAUDE_PLUGIN_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
+    input.session_id, process.env[PLUGIN_DATA_ENV]);
   appendEnvVar(SESSION_ID_ENV, input.session_id);
   appendEnvVar(TRANSCRIPT_PATH_ENV, input.transcript_path);
   appendEnvVar(PLUGIN_DATA_ENV, process.env[PLUGIN_DATA_ENV]);

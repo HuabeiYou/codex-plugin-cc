@@ -3,17 +3,88 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { makeTempDir } from "./helpers.mjs";
 import { runCodex, cancelRun, taskRequest, bindOutput } from "../plugins/codex-native-prototype/scripts/bridge.mjs";
 import { createRun, acceptEvent, readEvents } from "../plugins/codex-native-prototype/hooks/protocol.mjs";
+import { pluginEnvironment, publishPluginContext } from "../plugins/codex/scripts/lib/plugin-context.mjs";
+import { markReady, waitReady, readinessPath } from '../plugins/codex-native-prototype/scripts/native-ready-server.mjs';
+
+test('host readiness waits for the Mod and rejects another host generation or plugin', async () => {
+  const root = makeTempDir();
+  const other = makeTempDir();
+  const pid = process.pid;
+  try {
+    await assert.rejects(waitReady(root, pid, 'new-host', 30), /did not initialize/);
+    markReady(root, pid, 'old-host');
+    await assert.rejects(waitReady(root, pid, 'new-host', 30), /did not initialize/);
+    const ready = waitReady(root, pid, 'new-host', 1000);
+    setTimeout(() => markReady(root, pid, 'new-host'), 50);
+    await ready;
+    await assert.rejects(waitReady(other, pid, 'new-host', 30), /did not initialize/);
+  } finally { fs.rmSync(readinessPath(root, pid), { force: true }); }
+});
 
 function fixture(behavior) {
   const bin = makeTempDir();
   installFakeCodex(bin, behavior);
   return { bin, env: { ...buildEnv(bin), CLAUDE_PLUGIN_DATA: path.join(bin, "data"), CODEX_COMPANION_SESSION_ID: "native-test-session" }, cwd: makeTempDir(), runId: randomUUID(), prompt: "Read README.md exactly once." };
 }
+
+test('native bridge CLI runs through a symlinked plugin path', () => {
+  const directory = makeTempDir();
+  const bridge = path.join(directory, 'linked-bridge.mjs');
+  fs.symlinkSync(fileURLToPath(new URL('../plugins/codex-native-prototype/scripts/bridge.mjs', import.meta.url)), bridge);
+  const pluginData = path.join(directory, 'plugin-data');
+  const response = spawnSync(process.execPath, [bridge, 'report-path', randomUUID()], {
+    encoding: 'utf8', env: { ...process.env, CLAUDE_PLUGIN_DATA: pluginData }
+  });
+  assert.equal(response.status, 0, response.stderr);
+  const result = JSON.parse(response.stdout);
+  assert.equal(result.pluginData, pluginData);
+  assert.equal(path.dirname(result.reportFile), path.join(pluginData, 'native-reports'));
+});
+
+test('native checkpoint continues its exact thread after a session handoff and preserves completion', async () => {
+  const options = fixture('interruptible-slow-task');
+  const first = await runCodex(options, (event) => {
+    if (event.type === 'turn') cancelRun(options.runId);
+  });
+  assert.equal(first.status, 'interrupted');
+  // A different, newer worker must not steal this worker's continuation.
+  installFakeCodex(options.bin, 'native-stream-task');
+  const other = await runCodex({ ...options, runId: randomUUID() }, () => {});
+  const resumed = await runCodex({ ...options, env: { ...options.env, CODEX_COMPANION_SESSION_ID: 'adopted-session' } }, () => {});
+  assert.equal(resumed.status, 'completed');
+  assert.equal(resumed.threadId, first.threadId);
+  assert.notEqual(resumed.threadId, other.threadId);
+  let state = JSON.parse(fs.readFileSync(path.join(options.bin, 'fake-codex-state.json')));
+  assert.equal(state.lastThreadResume.threadId, first.threadId);
+  assert.equal(state.lastThreadResume.sandbox, 'workspace-write');
+  const starts = state.appServerStarts;
+  assert.deepEqual(await runCodex(options, () => {}), resumed);
+  state = JSON.parse(fs.readFileSync(path.join(options.bin, 'fake-codex-state.json')));
+  assert.equal(state.appServerStarts, starts, 'A delivered checkpoint answer must not execute twice');
+  await assert.rejects(runCodex({ ...options, cwd: makeTempDir() }, () => {}), /different workspace/);
+});
+
+test('Mods recover the classic hook data path only for the matching plugin root and session', () => {
+  const root = makeTempDir();
+  const pluginData = makeTempDir();
+  const sessionId = randomUUID();
+  publishPluginContext(root, sessionId, pluginData);
+  const alias = path.join(makeTempDir(), 'plugin');
+  fs.symlinkSync(root, alias);
+  const env = { CODEX_COMPANION_SESSION_ID: sessionId };
+  assert.equal(pluginEnvironment(alias, env).CLAUDE_PLUGIN_DATA, pluginData);
+  assert.equal(pluginEnvironment(root, env).CLAUDE_PLUGIN_DATA, pluginData);
+  assert.equal(pluginEnvironment(root, { CODEX_COMPANION_SESSION_ID: randomUUID() }).CLAUDE_PLUGIN_DATA, undefined);
+  assert.equal(pluginEnvironment(makeTempDir(), env).CLAUDE_PLUGIN_DATA, undefined);
+  assert.equal(pluginEnvironment(root, { ...env, CLAUDE_PLUGIN_DATA: '/explicit' }).CLAUDE_PLUGIN_DATA, '/explicit');
+});
 
 test("native bridge streams a real app-server protocol turn without repeating its final text or executing tools twice", async () => {
   const options = fixture("native-stream-task");

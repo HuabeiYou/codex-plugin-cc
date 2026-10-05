@@ -39,13 +39,15 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
     fs.cpSync(path.join(official, name), path.join(pluginRoot, name), { recursive: true });
   }
   fs.rmSync(path.join(pluginRoot, 'agents', 'codex-rescue.md'));
+  fs.writeFileSync(path.join(pluginRoot, 'agents', 'worker.md'), fs.readFileSync(path.join(native, 'agents', 'worker.md'), 'utf8').replaceAll('codex-native-prototype:', 'codex:'));
   fs.writeFileSync(path.join(pluginRoot, 'commands', 'rescue.md'), fs.readFileSync(path.join(native, 'commands', 'rescue.md'), 'utf8').replaceAll('codex-native-prototype:', 'codex:'));
   const baseManifest = json(path.join(official, '.claude-plugin', 'plugin.json'));
   const nativeManifest = json(path.join(native, '.claude-plugin', 'plugin.json'));
   const hash = createHash('sha256');
   for (const name of ['agents', 'commands', 'hooks', 'skills', 'scripts', 'schemas', 'prompts']) hashFiles(hash, path.join(official, name));
-  for (const name of ['hooks', 'scripts', 'skills', 'tests', 'commands']) hashFiles(hash, path.join(native, name));
+  for (const name of ['agents', 'hooks', 'scripts', 'skills', 'tests', 'commands']) hashFiles(hash, path.join(native, name));
   hash.update(fs.readFileSync(fileURLToPath(import.meta.url)));
+  hash.update(fs.readFileSync(path.join(native, '.mcp.json')));
   const version = `${baseManifest.version}-native.${nativeManifest.version}.h${hash.digest('hex').slice(0, 12)}`;
   writeJson(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), {
     ...baseManifest, version,
@@ -61,8 +63,10 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   fs.writeFileSync(path.join(pluginRoot, 'hooks', 'native', 'register.js'), register);
   fs.copyFileSync(path.join(native, 'hooks', 'protocol.mjs'), path.join(pluginRoot, 'hooks', 'native', 'protocol.mjs'));
   const bridge = fs.readFileSync(path.join(native, 'scripts', 'bridge.mjs'), 'utf8')
-    .replace('"../../codex/scripts/codex-companion.mjs"', '"./codex-companion.mjs"');
+    .replaceAll('"../../codex/scripts/', '"./');
   fs.writeFileSync(path.join(pluginRoot, 'scripts', 'native-bridge.mjs'), bridge);
+  fs.copyFileSync(path.join(native, '.mcp.json'), path.join(pluginRoot, '.mcp.json'));
+  fs.copyFileSync(path.join(native, 'scripts', 'native-ready-server.mjs'), path.join(pluginRoot, 'scripts', 'native-ready-server.mjs'));
   fs.cpSync(path.join(native, 'skills'), path.join(pluginRoot, 'skills'), { recursive: true });
   fs.copyFileSync(path.join(native, 'tsconfig.json'), path.join(pluginRoot, 'tsconfig.json'));
   fs.mkdirSync(path.join(pluginRoot, 'tests'), { recursive: true });

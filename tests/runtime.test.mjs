@@ -1832,6 +1832,27 @@ test("cancel sends turn interrupt to the shared app-server before killing a brok
   assert.equal(cleanup.status, 0, cleanup.stderr);
 });
 
+test("session end retains native worker checkpoints for an agents-view handoff", () => {
+  const repo = makeTempDir();
+  initGitRepo(repo);
+  const stateDir = resolveStateDir(repo);
+  const jobsDir = path.join(stateDir, "jobs");
+  fs.mkdirSync(jobsDir, { recursive: true });
+  const native = { id: "task-native", nativeRunId: "owned-native-id", status: "cancelled", sessionId: "sess-handoff" };
+  const classic = { id: "task-classic", status: "completed", sessionId: "sess-handoff" };
+  for (const job of [native, classic]) fs.writeFileSync(path.join(jobsDir, job.id + ".json"), JSON.stringify(job));
+  fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ version: 1, config: { stopReviewGate: false }, jobs: [native, classic] }));
+  const result = run("node", [SESSION_HOOK, "SessionEnd"], {
+    cwd: repo, env: { ...process.env, CODEX_COMPANION_SESSION_ID: "sess-handoff" },
+    input: JSON.stringify({ session_id: "sess-handoff", cwd: repo })
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const saved = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json")));
+  assert.deepEqual(saved.jobs.map((job) => job.id), [native.id]);
+  assert.equal(fs.existsSync(path.join(jobsDir, native.id + ".json")), true);
+  assert.equal(fs.existsSync(path.join(jobsDir, classic.id + ".json")), false);
+});
+
 test("session end fully cleans up jobs for the ending session", async (t) => {
   const repo = makeTempDir();
   initGitRepo(repo);

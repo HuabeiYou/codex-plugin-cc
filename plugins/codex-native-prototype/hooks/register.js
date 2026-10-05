@@ -74,16 +74,17 @@ function renderActivity($, e, selectedRuns) {
 /** @type {import('claude-code').Register} */
 export function register(on) {
   on('session.start', async ($, e, next) => {
-    await $.agent.register({
-      name: 'worker',
-      description: 'Delegate substantial implementation, debugging, investigation, or continuation to Codex with live activity. Uses the rescue runtime with file edits and persistent threads. Before delegating, apply codex-native-prototype:codex-native-supervision for task controls and parent ownership through completion.',
-      prompt: 'Carry out the delegated task. The Codex Mod runs the shared rescue runtime and supplies your response.',
-      tools: [],
-      maxTurns: 1
-    });
     await $.command.register({ name: 'codex-native', description: 'Delegate a task to the native Codex worker', argumentHint: '<task>', immediate: true });
     await $.command.register({ name: 'codex-native-status', description: 'Show native Codex agents and open their activity', immediate: true });
     await $.command.register({ name: 'codex-native-stop', description: 'Stop a native Codex agent', argumentHint: '<agent-id>', immediate: true });
+    const result = await next(e);
+    const ready = await $.process.run(['node', `${$.plugin.root}/scripts/native-ready-server.mjs`, '--mark']);
+    if (ready.exitCode !== 0) throw new Error(`Could not publish Codex Mod readiness: ${ready.stderr}`);
+    return result;
+  });
+  on('session.end', async ($, e, next) => {
+    try { await $.process.run(['node', `${$.plugin.root}/scripts/native-ready-server.mjs`, '--clear']); }
+    catch { /* The host may already be shutting down. Its identity expires. */ }
     return next(e);
   });
 
@@ -111,9 +112,25 @@ export function register(on) {
     // Give the parent an actual report artifact through the ordinary Agent handle.
     const outputFile = result.outputFile;
     if (!outputFile) return response;
-    const bound = await $.process.run(['node', `${$.plugin.root}/scripts/bridge.mjs`, 'bind-output', run.id, outputFile, result.agentId]);
+    const bound = await $.process.run(['node', `${$.plugin.root}/scripts/bridge.mjs`, 'bind-output', run.id, outputFile, result.agentId],
+      { env: { CODEX_COMPANION_SESSION_ID: await $.session.id() } });
     if (bound.exitCode !== 0) throw new Error(`Could not bind Codex report: ${bound.stderr}`);
     return response;
+  });
+
+  on('tool.call', { tool: 'TaskStop' }, async ($, e, next) => {
+    const run = runs.get(e.task_id);
+    if (run && (run.status === 'running' || run.status === 'starting')) {
+      let release = (_value) => {};
+      run.stopGate = new Promise((resolve) => { release = resolve; });
+      // Let Codex acknowledge turn/interrupt before Claude kills its wrapper.
+      // A timeout still proceeds to the harness's own stop/kill path.
+      try {
+        await $.process.run(['node', `${$.plugin.root}/scripts/bridge.mjs`, 'cancel', run.id, '--wait']);
+        return await next(e);
+      } finally { release(undefined); run.stopGate = null; }
+    }
+    return next(e);
   });
 
   on('turn.step', async function* ($, e, next) {
@@ -122,7 +139,7 @@ export function register(on) {
     const agent = agents.find((candidate) => candidate.id === e.agentId && candidate.type === AGENT_TYPE);
     if (!agent) return yield* next(e);
     let run = runs.get(e.agentId);
-    if (run?.started) {
+    if (run?.started && run.claudeTurnId === e.turnId) {
       // Never rerun a Codex task if Claude's loop unexpectedly requests a retry.
       const answer = workerAnswer(run);
       yield { kind: 'text', index: 0, text: answer };
@@ -130,7 +147,16 @@ export function register(on) {
       return stepResult(e, answer);
     }
     run ??= createRun(e.agentId, agent.description, crypto.randomUUID());
+    // Claude's agents view checkpoints a child and resumes it in another host.
+    // Keep the bridge identity across that handoff, scoped to this plugin/agent.
+    const saved = /** @type {{ id?: string, pluginData?: string, prompt?: string } | undefined} */ (await $.store.get(`native-run:${e.agentId}`));
+    if (saved?.id) { run.id = saved.id; run.pluginData = saved.pluginData; }
     run.started = true;
+    run.claudeTurnId = e.turnId;
+    run.status = 'starting';
+    run.result = null;
+    run.error = null;
+    run.answer = '';
     runs.set(e.agentId, run);
     const row = spawnRows.get(e.agentId);
     run.toolUseId = row?.toolUseId ?? null;
@@ -139,18 +165,34 @@ export function register(on) {
     let stderr = '';
     let stream;
     try {
-      const messages = await $.session.messages({ agentId: e.agentId });
-      if (!Array.isArray(messages)) throw new Error(messages.deny);
-      const prompt = row?.prompt || [...messages].reverse().find((message) => message.role === 'user')?.text;
+      let prompt = row?.prompt || saved?.prompt;
+      if (!prompt) {
+        const messages = await $.session.messages({ agentId: e.agentId });
+        if (!Array.isArray(messages)) throw new Error(messages.deny);
+        prompt = [...messages].reverse().find((message) => message.role === 'user')?.text;
+      }
       if (!prompt) throw new Error('The native agent task could not be read.');
+      const sessionId = await $.session.id();
+      if (!run.pluginData) {
+        const location = await $.process.run(['node', `${$.plugin.root}/scripts/bridge.mjs`, 'report-path', run.id],
+          { env: { CODEX_COMPANION_SESSION_ID: sessionId } });
+        if (location.exitCode !== 0) throw new Error(`Could not resolve Codex data: ${location.stderr}`);
+        run.pluginData = JSON.parse(location.stdout).pluginData;
+      }
+      // Persist restoration inputs before the task starts, including an early
+      // agents-view switch that happens before its first ready event arrives.
+      await $.store.set(`native-run:${e.agentId}`, { id: run.id, pluginData: run.pluginData, prompt });
       // Real progress chunks reset Claude's watchdog; UI redraws do not.
       yield { kind: 'thinking', index: 0, text: 'Starting Codex.\n' };
-      await $.ui.open({ id: PANE_ID, title: 'Codex activity' });
+      // Auto-open is optional inspection and must not hold a background task.
+      $.ui.open({ id: PANE_ID, title: 'Codex activity' }).catch((error) => {
+        run.noticeError = error instanceof Error ? error.message : String(error);
+      });
       $.ui.invalidate('ui.render');
       stream = $.process.spawn({
         argv: ['node', `${$.plugin.root}/scripts/bridge.mjs`, 'run', run.id],
         cwd: row?.cwd || await $.session.cwd(),
-        env: { CODEX_COMPANION_SESSION_ID: await $.session.id() },
+        env: { CODEX_COMPANION_SESSION_ID: sessionId, ...(run.pluginData ? { CLAUDE_PLUGIN_DATA: run.pluginData } : {}) },
         input: JSON.stringify({ prompt })
       });
       while (true) {
@@ -164,13 +206,16 @@ export function register(on) {
         buffer = parsed.buffer;
         for (const event of parsed.events) {
           acceptEvent(run, event);
+          if (event.kind === 'ready') {
+            run.pluginData = event.pluginData;
+          }
           const progress = activityText(run, event);
           if (progress && !next.signal.aborted) {
             yield { kind: 'thinking', index: 0, text: progress + '\n' };
             await recordActivity($, run, progress);
           }
           $.ui.invalidate('ui.render');
-          if (event.kind === 'text') {
+          if (event.kind === 'text' && !next.signal.aborted) {
             streamed += event.text;
             yield { kind: 'text', index: 1, text: event.text };
           }
@@ -184,10 +229,21 @@ export function register(on) {
           await recordActivity($, run, progress);
         }
       }
-      if (next.signal.aborted) run.status = 'interrupted';
+      // TaskStop owns the agent's killed state. Keep this turn unfinished while
+      // its caller waits for Codex cleanup, then lets Claude stop the child.
+      if (run.stopGate) await new Promise((resolve, reject) => {
+        const abort = () => reject(new Error('Native worker stopped by Claude.'));
+        if (next.signal.aborted) return abort();
+        next.signal.addEventListener('abort', abort, { once: true });
+        run.stopGate.then(() => { next.signal.removeEventListener('abort', abort); resolve(undefined); });
+      });
+      if (next.signal.aborted) throw new Error('Native worker checkpointed by Claude.');
     } catch (error) {
       run.status = next.signal.aborted ? 'interrupted' : 'failed';
       run.error = error instanceof Error ? error.message : String(error);
+      // A checkpoint must leave an unfinished transcript. An end_turn answer
+      // here makes Claude's adoption path consider the child already completed.
+      if (next.signal.aborted) throw error;
     } finally {
       if (stream) await stream.return({ code: null, signal: 'SIGTERM' });
       $.ui.invalidate('ui.render');
@@ -203,6 +259,7 @@ export function register(on) {
     if (!run) return yield* next(e);
     run.status = next.signal.aborted ? 'interrupted' : 'failed';
     run.error = next.error.message;
+    if (next.signal.aborted) throw next.error;
     const answer = workerAnswer(run);
     yield { kind: 'text', index: 0, text: answer };
     yield { kind: 'stop', stopReason: 'end_turn', usage: null };

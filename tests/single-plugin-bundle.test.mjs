@@ -28,11 +28,13 @@ test('single plugin build is deterministic and contains both hook systems and on
     const hooks = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'hooks/hooks.json')));
     assert.ok(hooks.hooks.SessionStart && hooks.hooks.SessionEnd && hooks.hooks.Stop);
     assert.deepEqual(hooks.modules, ['./native/register.js']);
+    assert.ok(fs.existsSync(path.join(pluginRoot, 'scripts/native-ready-server.mjs')));
+    assert.match(fs.readFileSync(path.join(pluginRoot, '.mcp.json'), 'utf8'), /native-ready-server.mjs/);
     const register = fs.readFileSync(path.join(pluginRoot, 'hooks/native/register.js'), 'utf8');
     assert.match(register, /codex:worker/);
     assert.equal(fs.existsSync(path.join(pluginRoot, 'agents/codex-rescue.md')), false);
     assert.match(fs.readFileSync(path.join(pluginRoot, 'commands/rescue.md'), 'utf8'), /codex:worker/);
-    assert.match(register, /codex:codex-native-supervision/);
+    assert.match(fs.readFileSync(path.join(pluginRoot, 'agents/worker.md'), 'utf8'), /codex:codex-native-supervision/);
     assert.doesNotMatch(register, /codex-native-prototype:/);
     assert.ok(fs.existsSync(path.join(pluginRoot, 'skills/codex-job-supervision/SKILL.md')));
     assert.ok(fs.existsSync(path.join(pluginRoot, 'skills/codex-native-supervision/SKILL.md')));

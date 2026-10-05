@@ -11,7 +11,13 @@ let feedback = null;
 let childMessages = [];
 const activityNotices = [];
 const openedPanes = [];
+const bridgeControls = [];
 export function register(on) {
+  on('process.run', async ($, e, next) => {
+    const response = await next(e);
+    if (e.argv.some((arg) => arg.endsWith('/scripts/native-bridge.mjs') || arg.endsWith('/scripts/bridge.mjs'))) bridgeControls.push({ command: e.argv[2], response });
+    return response;
+  });
   on('session.append', async ($, e, next) => {
     const stored = await next(e);
     if (e.agentId && e.message.type === 'system') activityNotices.push({ agentId: e.agentId, text: e.message.content.map((c) => c.text || '').join(''), stored: !stored.deny });
@@ -27,7 +33,7 @@ export function register(on) {
     const stream = next(e);
     while (true) {
       const item = await stream.next();
-      if (item.done) return { value: item.value };
+      if (item.done) return item.value;
       const chunk = item.value;
       if (chunk.stream === 'stdout') {
         const lines = (buffer + chunk.text).split('\n');
@@ -96,7 +102,7 @@ export function register(on) {
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'TaskStop', input }], stopReason: 'tool_use', usage: null };
     }
     if (cancelMode) await $.clock.sleep(250);
-    const answer = JSON.stringify({ child, agentId: result?.result?.agentId, stopped, feedback, bridgeEvents, activityNotices, childMessages, openedPanes, scriptedParentSteps: steps });
+    const answer = JSON.stringify({ child, agentId: result?.result?.agentId, stopped, feedback, bridgeEvents, bridgeControls, activityNotices, childMessages, openedPanes, scriptedParentSteps: steps });
     yield { kind: 'text', index: 0, text: answer };
     yield { kind: 'stop', stopReason: 'end_turn', usage: null };
     return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: 'end_turn', usage: null };

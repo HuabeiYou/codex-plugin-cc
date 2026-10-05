@@ -31,6 +31,6 @@ Optional fields:
 
 Preserve the task text in `task`; keep runtime controls in their fields. Use native Agent foreground/background options rather than asking the companion to detach. The worker stays attached until Codex finishes, even for long implementation tasks.
 
-The activity pane is optional user inspection. Native task feedback is the parent supervision path. The user does not need to request status or result retrieval. Saved Codex threads support explicit continuation; an in-flight Claude agent is not automatically restored after a Claude restart.
+The activity pane is optional user inspection. Native task feedback is the parent supervision path. The user does not need to request status or result retrieval. Opening Claude's agents view preserves the worker identity and resumes its exact interrupted Codex thread after the session handoff. Continue reading completion feedback or the retained launch report automatically. Saved threads also support explicit continuation. Arbitrary exit/restart restoration remains outside this guarantee.
 
 Use native task handles for waits and cancellation. Never create shell wait loops or use process-name polling for worker supervision.

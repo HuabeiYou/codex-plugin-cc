@@ -468,7 +468,14 @@ async function executeTaskRun(request) {
   });
 
   let resumeThreadId = null;
-  if (request.resumeLast) {
+  if (request.resumeFrom) {
+    const saved = readStoredJob(workspaceRoot, request.resumeFrom.jobId);
+    if (!saved || saved.nativeRunId !== request.nativeRunId || saved.threadId !== request.resumeFrom.threadId
+        || saved.sessionId !== request.resumeFrom.sessionId || saved.status !== 'cancelled') {
+      throw new Error('The native checkpoint does not match an interrupted owned Codex job.');
+    }
+    resumeThreadId = saved.threadId;
+  } else if (request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
       excludeJobId: request.jobId
     });
@@ -544,10 +551,12 @@ export async function executeNativeTask(request) {
   const effort = normalizeReasoningEffort(request.effort);
   requireTaskRequest(request.prompt, request.resumeLast);
   const metadata = buildTaskRunMetadata(request);
-  const job = buildTaskJob(workspaceRoot, metadata, request.write !== false);
+  const job = { ...buildTaskJob(workspaceRoot, metadata, request.write !== false),
+    ...(request.nativeRunId ? { nativeRunId: request.nativeRunId } : {}) };
   const { logFile, progress } = createTrackedProgress(job);
   return runTrackedJob(job, () => executeTaskRun({ ...request, model, effort,
     write: request.write !== false, jobId: job.id,
+    onReady: (ready) => request.onReady?.({ ...ready, jobId: job.id, sessionId: job.sessionId }),
     onProgress: (event) => { progress?.(event); request.onProgress?.(event); }
   }).then((execution) => ({ ...execution, jobId: job.id })), { logFile, signal: request.signal });
 }

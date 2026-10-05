@@ -1,3 +1,38 @@
+# Agents-view handoff fix (2026-10-05)
+
+The `0.2.2` candidate is staged in `output/codex-navigation-staging`, separately from the installed local marketplace. The user confirmed that pressing left arrow alone lost a running worker; there was no restart. That action checkpoints the child and adopts it into another Claude host session.
+
+The fix addresses three observed failures:
+
+- An exception or clean bridge exit after an abort could write a final answer. Claude then treated the checkpointed child as finished. Both abort paths now leave the turn unfinished.
+- Dynamic agent registration and volatile run state were unavailable during adoption. A static worker definition and persisted bridge identity, data path, prompt, and exact interrupted job now survive the handoff. Native work and companion commands share the same plugin data store.
+- Claude Code 2.1.289 could start an adopted `codex:worker` request before its Mod was loaded. A captured host log shows the worker API request at `10:06:17.354Z` and Mod loading at `.355Z`. A no-tools local MCP handshake holds the host's existing adoption barrier until the Mod publishes readiness. The gate uses canonical plugin root, parent PID, and process birth identity. It is bounded to ten seconds. If the Mod cannot load, the static Claude fallback reports runtime failure; only the Codex runtime executes implementation work.
+
+Claude independently reviewed the aborted-turn patch and then the startup handshake. Its second review led to locale-independent process identity, private readiness storage, safer temporary-file creation, malformed-input handling, cleanup on normal session end, and stronger acceptance checks. Claude's documented `$.process.spawn` abort behavior and the real handoff test verify that the old process is stopped before restoration. The handshake remains a workaround for an observed host startup race; a later Claude release may change this ordering.
+
+## Real terminal, simulated Codex
+
+The terminal runner presses left arrow once, with model requests blocked. It verifies the same native agent and Codex thread, automatic parent report reading, readiness before adoption, and old app-server exit before the resumed one starts. Three consecutive uninstrumented production-plugin runs passed before adding handshake trace assertions (4.360, 4.740, and 4.679 seconds).
+
+The final package passed with both prewarmed and cold background hosts:
+
+| Host | Agent | Original session | Adopted session | Wall time |
+| --- | --- | --- | --- | --- |
+| Warm | `a47a9f1c8bfde79c0` | `6475e7a7-ab59-4ff1-bbaa-4795571f224c` | `7aa4237a-cc17-4915-bbc7-de04812247b4` | 4.441 s |
+| Cold | `a63b7554096b59a88` | `106854c2-4def-4ae5-9f57-7441231fc7a4` | `ba0ed046-93e4-4f6d-b1cc-c5aee5c82b20` | 4.430 s |
+
+Both restored `thr_1`, created no second Codex thread, made zero Claude model requests, and delivered the complete report automatically. Removing only the handshake caused the negative-control run to time out after 50 seconds, with no restored result. The test configuration, workspace, and plugin copy are isolated from the installed package. Failed traces remain available locally; inherited environment snapshots are deleted.
+
+Early harness iterations made unintended Claude requests in an empty synthetic workspace before the provider block and scripted driver survived the host handoff. Later runs use a dummy Claude API key, a blocked provider endpoint, and isolated configuration. A lifecycle test initially loaded the older installed plugin alongside staging; immutable plugin copies and isolated configuration removed that ambiguity.
+
+## Automated checks and qualification
+
+The full Node suite passed **116/116** in 134.3 seconds, including the actual task beyond two minutes. Later focused readiness and deterministic-bundle checks passed. Staged Mod tests passed **8/8**, TypeScript checks passed, and strict plugin/marketplace validation passed. The real Claude lifecycle runner with simulated Codex passed file implementation, automatic background feedback, exact-target TaskStop with interrupt acknowledgement, and activity-only watchdog protection.
+
+These checks establish macOS protocol and lifecycle behavior with Claude Code 2.1.289. Linux/Windows and real-provider reliability remain unverified for this patch. The requested normal-use field trial is still needed. Arbitrary exit, hard kill, or restart is outside the automatic-restoration guarantee. The installed local marketplace remains unchanged until the user finishes active work and rebuilds it.
+
+---
+
 # Worker activity and watchdog fix (2026-10-05)
 
 The `0.2.1` staging build `1.0.6-native.0.2.1.h992a221ed026` keeps Claude's ordinary Agent row in the main transcript. Its activity pane opens automatically, uses a five-worker paged selector, and shows only the selected worker's details. Entering a worker thread selects that worker; users can also choose another worker within the pane. Activity starts compact and can be expanded.

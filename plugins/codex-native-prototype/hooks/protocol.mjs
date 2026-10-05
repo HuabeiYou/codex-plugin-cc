@@ -13,6 +13,7 @@ export function acceptEvent(run, event) {
   } else if (event.kind === "text") {
     run.answer += event.text;
   } else if (event.kind === "result") {
+    if (event.threadId) run.threadId = event.threadId;
     run.result = event;
     run.status = event.status;
     run.answer = event.answer;

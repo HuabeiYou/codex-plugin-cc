@@ -30,13 +30,13 @@ The native bridge calls `executeNativeTask` in the companion. Both native work a
 
 Each native task stays attached until completion; there is no fixed two-minute task limit. Its default sandbox is `workspace-write`, with the same `approvalPolicy: never` as rescue. Explicit read-only scope uses `read-only`. The Mod inherits the configured Codex provider and model unless the user selects a model.
 
-Saved Codex threads support explicit continuation within the current Claude session. Restarting Claude does not restore an in-flight Agent automatically. Existing companion commands and session cleanup keep their current behavior. The standalone official plugin source retains its forwarding agent; only our single-plugin bundle removes it.
+Opening Claude's agents view can move the parent and its workers to another host session. The worker definition is available before adoption; an aborted checkpoint stays unfinished. A no-tools MCP startup handshake makes adoption wait for this host's Mod to load. The Mod restores the exact worker identity and resumes its interrupted Codex thread. Claude receives completion feedback and reads the report in the new session. Native jobs and companion status share the plugin data store. An arbitrary exit or restart still does not guarantee automatic restoration. The standalone official plugin source retains its forwarding agent; only our single-plugin bundle removes it.
 
 A failed bridge returns a visible error. Repeated native model steps reuse the result instead of executing the task again. Ordinary Claude agents pass through unchanged. Parent feedback uses native Agent completion and its output-file handle. The Mod saves the full Codex report at that native task artifact; this also supports headless background workers whose Mod-supplied answers do not create a model transcript. It replaces only the owned worker's temporary output artifact, leaving transcript files untouched. Reports are also retained under the plugin data directory's `native-reports` folder.
 
 ## Validation
 
-Run `npm run prototype:test`, `npm run prototype:validate`, `npm run prototype:acceptance`, and `npm test`. The full Node suite includes an actual elapsed-time check beyond two minutes. Claude generates the Mod API types when it loads the plugin.
+Run `npm run prototype:test`, `npm run prototype:validate`, `npm run prototype:acceptance`, and `npm test`. `npm run prototype:navigation` drives the actual terminal left-arrow handoff with simulated Codex and provider requests blocked. The full Node suite includes an actual elapsed-time check beyond two minutes. Claude generates the Mod API types when it loads the plugin.
 
 The scripted acceptance runner uses real Claude Agent and TaskStop tools with a simulated Codex provider, without model requests. It checks a workspace file edit, activity, completion, cancellation, and process cleanup. `--real` uses the configured provider on explicitly read-only tasks and incurs provider usage.
 

@@ -629,7 +629,7 @@ rl.on("line", (line) => {
           }
         ];
 
-	        if (BEHAVIOR === "interruptible-slow-task" || BEHAVIOR === "native-long-task") {
+	        if (BEHAVIOR === "interruptible-slow-task" || BEHAVIOR === "native-long-task" || BEHAVIOR === "native-navigation-task") {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
 	          const timer = setTimeout(() => {
 	            if (!interruptibleTurns.has(turnId)) {
@@ -642,7 +642,7 @@ rl.on("line", (line) => {
 	              }
 	            }
 	            send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
-	          }, BEHAVIOR === "native-long-task" ? 130000 : 5000);
+	          }, BEHAVIOR === "native-navigation-task" ? (state.lastThreadResume?.threadId === thread.id ? 500 : 40000) : BEHAVIOR === "native-long-task" ? 130000 : 5000);
 	          interruptibleTurns.set(turnId, { threadId: thread.id, timer });
 	        } else if (BEHAVIOR === "slow-task") {
 	          emitTurnCompletedLater(thread.id, turnId, items, 400);

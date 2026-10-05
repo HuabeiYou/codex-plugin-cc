@@ -1,10 +1,15 @@
-import { test, expect } from 'claude-code/testing';
+import { test, expect, mock } from 'claude-code/testing';
 
 const TYPE = 'codex-native-prototype:worker';
 const STEP = { turnId: 'native-turn', index: 0, model: 'unused', messageCount: 1, agentId: 'native-agent' };
 const PANE = { component: 'Pane' as const, requestId: 'codex-native-activity', props: { title: 'Codex activity', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} } };
 
-function dependencies(on, agents = [{ id: 'native-agent', type: TYPE, description: 'Read README', status: 'running' }], onOpen = () => {}) {
+function dependencies(on, agents = [{ id: 'native-agent', type: TYPE, description: 'Read README', status: 'running' }], onOpen = () => {}, onProcessRun = null) {
+  mock.store(on);
+  on('process.run', async ($, e, next) => {
+    if (e.argv[2] === 'report-path') return { value: { exitCode: 0, stdout: JSON.stringify({ pluginData: '/tmp/native-mod-test-data' }), stderr: '' } };
+    return onProcessRun ? onProcessRun($, e) : next(e);
+  });
   on('agent.list', () => ({ value: agents }));
   on('session.messages', () => ({ value: [{ role: 'user', text: 'Read README.md' }] }));
   on('session.id', () => ({ value: 'native-test-session' }));
@@ -50,7 +55,7 @@ test('parent rows stay native, the pane opens automatically, and display failure
     const { Text } = $.ui.resolve(e);
     return h(Text, {}, 'Original Agent row');
   });
-  on('process.spawn', async function* () {
+  on('process.spawn', async function* ($) {
     processes++;
     const events = [
       { kind: 'ready', threadId: 'codex-thread' },
@@ -180,7 +185,10 @@ test('a failed bridge yields a visible error and never falls through to a Claude
 });
 
 test('the live Stop button addresses only its run and renders interrupted completion', async ($, on) => {
-  dependencies(on);
+  dependencies(on, undefined, undefined, ($, e) => {
+    cancelled = e.argv;
+    return { value: { exitCode: 0, stdout: '{"requested":true}', stderr: '' } };
+  });
   let release;
   let entered;
   const ready = new Promise<void>((resolve) => { entered = resolve; });
@@ -194,10 +202,6 @@ test('the live Stop button addresses only its run and renders interrupted comple
     await gate;
     yield { stream: 'stdout', text: JSON.stringify({ kind: 'result', status: 'interrupted', answer: '' }) + '\n' };
     return { value: { code: 130, signal: null } };
-  });
-  on('process.run', ($, e) => {
-    cancelled = e.argv;
-    return { value: { exitCode: 0, stdout: '{"requested":true}', stderr: '' } };
   });
   const pending = collect($.turn.step(STEP));
   await ready;
@@ -213,9 +217,8 @@ test('the live Stop button addresses only its run and renders interrupted comple
 
 
 test('background Agent handles point to the saved Codex report, preserving launch feedback', async ($, on) => {
-  dependencies(on);
   on('agent.spawn', () => ({ agentId: 'native-agent', model: 'unused' }));
-  on('process.run', ($, e) => {
+  dependencies(on, undefined, undefined, ($, e) => {
     expect(e.argv[2]).toBe('bind-output');
     expect(e.argv[4]).toBe('/tmp/tasks/native-agent.output');
     expect(e.argv[5]).toBe('native-agent');

@@ -11,15 +11,25 @@ import { installFakeCodex, buildEnv } from '../tests/fake-codex-fixture.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const real = process.argv.includes('--real');
 const bundled = process.argv.includes('--bundle');
-const pluginRoot = process.env.CODEX_NATIVE_ACCEPTANCE_PLUGIN_ROOT || path.join(root, bundled ? 'output/codex-local-marketplace/plugins/codex' : 'plugins/codex-native-prototype');
-const pluginName = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.claude-plugin/plugin.json'))).name;
+const pluginSource = process.env.CODEX_NATIVE_ACCEPTANCE_PLUGIN_ROOT || path.join(root, bundled ? 'output/codex-local-marketplace/plugins/codex' : 'plugins/codex-native-prototype');
+const pluginName = JSON.parse(fs.readFileSync(path.join(pluginSource, '.claude-plugin/plugin.json'))).name;
 if (process.argv.slice(2).some((arg) => !['--real', '--bundle'].includes(arg))) throw new Error('Usage: native-prototype-acceptance.mjs [--real] [--bundle]');
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-acceptance-'));
+const pluginRoot = path.join(directory, 'plugin');
+fs.cpSync(pluginSource, pluginRoot, { recursive: true });
+const config = path.join(directory, 'claude-config'); fs.mkdirSync(config);
+const userConfig = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
+const testApiKey = 'sk-ant-native-lifecycle-fixture';
+fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true,
+  cachedGrowthBookFeatures: userConfig.cachedGrowthBookFeatures, cachedDynamicConfigs: userConfig.cachedDynamicConfigs,
+  customApiKeyResponses: { approved: [testApiKey.slice(-20)], rejected: [] } }));
 const reports = [];
+let passed = false;
 
 function execute(env) {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', ['-p', 'Run native acceptance', '--max-turns', '2',
+      '--setting-sources', '', '--settings', JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' } }),
       '--plugin-dir', pluginRoot,
       '--plugin-dir', path.join(root, 'tests/fixtures/native-agent-driver'), '--output-format', 'json'],
     { cwd: env.CODEX_NATIVE_ACCEPTANCE_CWD || root, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -47,6 +57,7 @@ try {
     fs.mkdirSync(bin);
     if (!real) installFakeCodex(bin, watchdog ? 'native-activity-only-task' : cancel ? 'interruptible-slow-task' : 'native-edit-task');
     const env = { ...(real ? process.env : buildEnv(bin)),
+      CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: testApiKey, ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
       CODEX_NATIVE_ACCEPTANCE_CANCEL: cancel ? '1' : '0',
       CODEX_NATIVE_ACCEPTANCE_BACKGROUND: background ? '1' : '0',
       CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE: `${pluginName}:worker`,
@@ -62,6 +73,7 @@ try {
     assert.equal(response.is_error, false);
     assert.equal(Object.keys(response.modelUsage ?? {}).length, 0, 'Parent/child must not invoke Claude models');
     const detail = JSON.parse(response.result);
+    fs.writeFileSync(path.join(directory, `${cancel ? 'cancel' : watchdog ? 'watchdog' : background ? 'background' : 'complete'}-detail.json`), JSON.stringify(detail));
     const ready = detail.bridgeEvents.find((event) => event.kind === 'ready');
     assert.ok(ready?.threadId && ready.appServerPid, 'Codex app-server must actually start');
     const lifecycle = response.subagent_stats;
@@ -114,4 +126,8 @@ try {
       wallMs, cliReportedDurationMs: response.duration_ms, lifecycle });
   }
   console.log(JSON.stringify({ passed: true, reports }, null, 2));
-} finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  passed = true;
+} finally {
+  if (passed) fs.rmSync(directory, { recursive: true, force: true });
+  else console.error(`Acceptance diagnostics retained at ${directory}`);
+}
