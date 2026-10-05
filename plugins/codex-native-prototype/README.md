@@ -16,7 +16,11 @@ The parent applies `codex-native-supervision`, passes the task and explicit cont
 
 ## Activity and cancellation
 
-The Agent row shows Codex's actual model, task state, and recent activity. `/codex-native-status` opens a pane showing agent and Codex thread IDs, commands, command output, file changes, and nested Codex activity. It retains 100 events per run and shows the latest 20 for up to eight workers. The row is present from launch, including while the worker starts.
+The main transcript keeps Claude's ordinary Agent row. The activity pane opens automatically at worker startup. Its compact selector shows five workers per page; only the selected worker's details appear below it. Entering a worker thread selects that worker. Recent activity uses single lines by default; **Expand activity** shows the latest 20 events with full wrapping. `/codex-native-status` reopens the pane. Each worker retains 100 events.
+
+Open the worker from Claude's agent list to see its live activity in its own transcript. The Mod appends activity as notices addressed to that worker; these notices add no model input. The parent still receives completion feedback and reads the full report automatically.
+
+Real Codex activity also travels through Claude's native stream as progress, separately from answer text. This resets the host's idle watchdog while Codex is active. Pane redraws alone do not count as native stream progress. There is no synthetic heartbeat; a silent, stalled worker remains subject to Claude's watchdog.
 
 Use Claude's task controls, **Stop Codex**, or `/codex-native-stop <agent-id>` to stop an owned worker. Cancellation interrupts its exact Codex turn and closes its app-server. Workers use separate connections so one worker's stop does not close another's harness.
 

@@ -26,7 +26,7 @@ Start Claude normally in the project you want to work on:
 claude
 ```
 
-No `--plugin-dir` flags are needed. Ask Claude to use `codex:worker` for implementation, debugging, or continuation. `/codex:rescue` delegates to that same worker; the old forwarding agent is absent. `/codex-native-status` opens the optional activity pane. Other companion commands, including review, remain available.
+No `--plugin-dir` flags are needed. Ask Claude to use `codex:worker` for implementation, debugging, or continuation. `/codex:rescue` delegates to that same worker; the old forwarding agent is absent. The activity pane opens automatically, and `/codex-native-status` reopens it. Opening the worker from Claude's agent list shows its own activity notices. The main transcript keeps the ordinary Agent row and completion feedback. Other companion commands, including review, remain available.
 
 The worker uses rescue's workspace-write sandbox by default and can edit project files. Claude selects explicit read-only scope when the task requires it. Workers stay attached until completion, with no fixed task-duration cap. Claude reads their native completion feedback automatically. Saved Codex threads support continuation within the current Claude session; restarting Claude does not restore in-flight workers.
 

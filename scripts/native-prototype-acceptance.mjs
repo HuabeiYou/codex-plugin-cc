@@ -41,20 +41,21 @@ function alive(pid) {
 }
 
 try {
-  for (const scenario of [{ cancel: false, background: false }, { cancel: false, background: true }, { cancel: true, background: true }]) {
-    const { cancel, background } = scenario;
-    const bin = path.join(directory, cancel ? 'cancel' : background ? 'background' : 'complete');
+  for (const scenario of [{ cancel: false, background: false }, { cancel: false, background: true }, { cancel: true, background: true }, ...(!real ? [{ cancel: false, background: true, watchdog: true }] : [])]) {
+    const { cancel, background, watchdog } = scenario;
+    const bin = path.join(directory, watchdog ? 'watchdog' : cancel ? 'cancel' : background ? 'background' : 'complete');
     fs.mkdirSync(bin);
-    if (!real) installFakeCodex(bin, cancel ? 'interruptible-slow-task' : 'native-edit-task');
+    if (!real) installFakeCodex(bin, watchdog ? 'native-activity-only-task' : cancel ? 'interruptible-slow-task' : 'native-edit-task');
     const env = { ...(real ? process.env : buildEnv(bin)),
       CODEX_NATIVE_ACCEPTANCE_CANCEL: cancel ? '1' : '0',
       CODEX_NATIVE_ACCEPTANCE_BACKGROUND: background ? '1' : '0',
       CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE: `${pluginName}:worker`,
       CLAUDE_PLUGIN_DATA: path.join(directory, 'plugin-data'),
+      ...(watchdog ? { CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS: '2000' } : {}),
       CODEX_NATIVE_ACCEPTANCE_TASK: JSON.stringify({ write: real ? false : true, task: cancel
         ? 'Perform a thorough read-only review of this repository. Inspect implementation and tests; report architecture and integration issues in detail. Do not edit files.'
         : real ? 'Read README.md and describe this repository in one sentence. Do not edit anything.' : 'Implement a test change in the isolated acceptance workspace.' }) };
-    if (!real) { env.CODEX_NATIVE_ACCEPTANCE_CWD = path.join(directory, cancel ? 'cancel-workspace' : background ? 'background-workspace' : 'edit-workspace'); fs.mkdirSync(env.CODEX_NATIVE_ACCEPTANCE_CWD); }
+    if (!real) { env.CODEX_NATIVE_ACCEPTANCE_CWD = path.join(directory, watchdog ? 'watchdog-workspace' : cancel ? 'cancel-workspace' : background ? 'background-workspace' : 'edit-workspace'); fs.mkdirSync(env.CODEX_NATIVE_ACCEPTANCE_CWD); }
     const startedAt = Date.now();
     const response = await execute(env);
     const wallMs = Date.now() - startedAt;
@@ -65,6 +66,14 @@ try {
     assert.ok(ready?.threadId && ready.appServerPid, 'Codex app-server must actually start');
     const lifecycle = response.subagent_stats;
     assert.equal(lifecycle.spawned, 1);
+    assert.deepEqual(detail.openedPanes, ['codex-native-activity'], 'Worker launch opens the activity pane once');
+    assert.ok(detail.activityNotices.length > 0, 'Worker must publish live activity');
+    assert.ok(detail.activityNotices.every((n) => n.agentId === detail.child.agentId && n.stored), 'All activity must be stored in the owned worker transcript');
+    assert.ok(!detail.child.answer.includes('activity display was unavailable'), detail.child.answer);
+    if (!cancel && !real) {
+      assert.ok(detail.activityNotices.some((n) => n.text.includes('File change')), 'File activity must be published');
+      assert.ok(!detail.childMessages.some((m) => m.text.includes('File change')), 'Activity notices must stay out of model input');
+    }
     if (cancel) {
       assert.ok(detail.bridgeEvents.some((event) => event.type === 'turn' && event.turnId), 'Cancel an actual started Codex turn');
       assert.equal(detail.stopped?.taskId, detail.agentId);
@@ -72,10 +81,16 @@ try {
       assert.equal(Object.values(lifecycle.killed).reduce((sum, count) => sum + count, 0), 1);
       assert.equal(detail.child?.isAborted, true);
     } else {
-      assert.equal(lifecycle.completed, 1);
+      assert.equal(lifecycle.completed, 1, watchdog ? 'Actual Codex activity must keep the native stream watchdog alive' : undefined);
       assert.equal(background ? lifecycle.started_in_background : lifecycle.requested.foreground, 1);
       assert.equal(detail.child?.reason, 'answer');
       assert.ok(detail.child.answer.length > 0);
+      if (!real) assert.equal(detail.child.answer, 'Read-only answer.', 'Progress must not become the final report');
+      if (watchdog) {
+        const outputs = detail.bridgeEvents.filter((e) => e.type === 'commandOutput');
+        assert.ok(outputs.length >= 12, 'The watchdog fixture must actually emit command output');
+        assert.ok(outputs.at(-1).receivedAt - outputs[0].receivedAt > 2000, 'Actual Codex activity must span the shortened host watchdog interval');
+      }
       if (background) { assert.equal(detail.feedback?.isError, false, detail.feedback?.text); assert.ok(detail.feedback?.text?.length > 0); if (!real) assert.ok(detail.feedback.text.includes('Read-only answer.')); }
       assert.equal(detail.bridgeEvents.find((event) => event.kind === 'result')?.status, 'completed');
       if (!real) {
@@ -90,10 +105,13 @@ try {
       const state = JSON.parse(fs.readFileSync(path.join(bin, 'fake-codex-state.json')));
       assert.ok(state.lastInterrupt, 'TaskStop must reach Codex turn/interrupt');
     }
-    reports.push({ mode: real ? 'REAL' : 'SIMULATED_CODEX_REAL_CLAUDE_LIFECYCLE', scenario: cancel ? 'task-stop' : background ? 'background-completion-feedback' : real ? 'foreground-completion' : 'implementation-completion',
+    reports.push({ mode: real ? 'REAL' : 'SIMULATED_CODEX_REAL_CLAUDE_LIFECYCLE', scenario: watchdog ? 'activity-only-watchdog' : cancel ? 'task-stop' : background ? 'background-completion-feedback' : real ? 'foreground-completion' : 'implementation-completion',
       plugin: pluginName, sessionId: response.session_id, agentId: detail.agentId ?? detail.child.agentId, threadId: ready.threadId,
       model: ready.model ?? null, appServerPid: ready.appServerPid, appServerAlive: false,
-      claudeModelCalls: 0, parentReadReport: background && !cancel ? detail.feedback?.isError === false : null, wallMs, cliReportedDurationMs: response.duration_ms, lifecycle });
+      claudeModelCalls: 0, parentReadReport: background && !cancel ? detail.feedback?.isError === false : null,
+      workerActivityNotices: detail.activityNotices.length, automaticPanes: detail.openedPanes.length,
+      watchdogTimeoutMs: watchdog ? 2000 : null,
+      wallMs, cliReportedDurationMs: response.duration_ms, lifecycle });
   }
   console.log(JSON.stringify({ passed: true, reports }, null, 2));
 } finally { fs.rmSync(directory, { recursive: true, force: true }); }

@@ -8,7 +8,19 @@ let cancelMode = false;
 let stopped = null;
 let backgroundMode = false;
 let feedback = null;
+let childMessages = [];
+const activityNotices = [];
+const openedPanes = [];
 export function register(on) {
+  on('session.append', async ($, e, next) => {
+    const stored = await next(e);
+    if (e.agentId && e.message.type === 'system') activityNotices.push({ agentId: e.agentId, text: e.message.content.map((c) => c.text || '').join(''), stored: !stored.deny });
+    return stored;
+  });
+  on('ui.open', async ($, e, next) => {
+    openedPanes.push(e.id);
+    return next(e);
+  });
   on('process.spawn', async function* ($, e, next) {
     if (!e.argv.some((arg) => arg.endsWith('/codex-native-prototype/scripts/bridge.mjs') || arg.endsWith('/scripts/native-bridge.mjs'))) return yield* next(e);
     let buffer = '';
@@ -22,14 +34,18 @@ export function register(on) {
         buffer = lines.pop();
         for (const line of lines.filter(Boolean)) {
           const event = JSON.parse(line);
-          if (event.kind !== 'text') bridgeEvents.push(event);
+          if (event.kind !== 'text') bridgeEvents.push({ ...event, receivedAt: Date.now() });
         }
       }
       yield chunk;
     }
   });
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId) child = { agentId: e.agentId, answer: e.answer, isAborted: e.isAborted, reason: e.reason, turnId: e.turnId };
+    if (e.agentId) {
+      child = { agentId: e.agentId, answer: e.answer, isAborted: e.isAborted, reason: e.reason, turnId: e.turnId };
+      const found = await $.session.messages({ agentId: e.agentId });
+      if (Array.isArray(found)) childMessages = found;
+    }
     return next(e);
   });
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
@@ -80,7 +96,7 @@ export function register(on) {
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'TaskStop', input }], stopReason: 'tool_use', usage: null };
     }
     if (cancelMode) await $.clock.sleep(250);
-    const answer = JSON.stringify({ child, agentId: result?.result?.agentId, stopped, feedback, bridgeEvents, scriptedParentSteps: steps });
+    const answer = JSON.stringify({ child, agentId: result?.result?.agentId, stopped, feedback, bridgeEvents, activityNotices, childMessages, openedPanes, scriptedParentSteps: steps });
     yield { kind: 'text', index: 0, text: answer };
     yield { kind: 'stop', stopReason: 'end_turn', usage: null };
     return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: 'end_turn', usage: null };

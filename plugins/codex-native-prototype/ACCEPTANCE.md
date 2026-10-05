@@ -1,3 +1,26 @@
+# Worker activity and watchdog fix (2026-10-05)
+
+The `0.2.1` staging build `1.0.6-native.0.2.1.h992a221ed026` keeps Claude's ordinary Agent row in the main transcript. Its activity pane opens automatically, uses a five-worker paged selector, and shows only the selected worker's details. Entering a worker thread selects that worker; users can also choose another worker within the pane. Activity starts compact and can be expanded.
+
+The field report exposed a separate native stream defect. The real Codex job `task-muuyfmbw-13sdg8` ran from `07:55:01.208Z` to `08:05:01.263Z`, then became `cancelled` after Claude's 600-second stream watchdog aborted the worker. Updating pane state alone did not produce native stream progress. The Mod now forwards actual Codex activity as native progress chunks and stores worker-scoped activity notices, separate from answer text. It uses no synthetic heartbeat.
+
+The real Claude host, using a **simulated Codex provider**, passed:
+
+| Scenario | Claude session | Evidence |
+| --- | --- | --- |
+| Implementation | `fcea7ca8-3774-49b0-a9f3-aef822b8a31f` | File edit, eight worker activity notices, one automatic pane, exact final answer |
+| Background report | `554441b5-56c4-47ea-8aaf-f05efafde8c1` | Parent Read retrieved the full report; activity stayed out of model input |
+| TaskStop | `e15497a6-3ab5-483f-97f2-80cb5d12076b` | Exact owned turn interrupted and app-server stopped |
+| Activity without answer text | `60504780-b41d-475f-b63c-dfbe6cf21eea` | Completed with Claude's idle watchdog shortened to 2,000 ms while command activity continued for 3,600 ms before the answer |
+
+The watchdog scenario failed before progress forwarding and passed afterward. It exercised the actual host watchdog, not a simulated timer. Its 4,533 ms total run is a shortened-threshold regression test, not a ten-minute soak. All scenarios used zero Claude model calls, and no owned app-server survived completion or cancellation.
+
+Eight Mod tests passed, including terminal/desktop selection, worker-thread context, paging, automatic opening, unchanged parent rows, display failure, and cancellation. All 111 Node tests passed in 130.5 seconds, including the existing actual 125-second long-task test. Strict plugin/catalog validation and TypeScript checks passed. The default marketplace package and installed copy were left unchanged; the new package is staged in `output/codex-worker-ui-staging` for the next field-test upgrade.
+
+Interactive layout and reliability with the real configured provider remain part of normal-use field testing.
+
+---
+
 # Write-capable worker field-test build (2026-10-05)
 
 The `0.2.0` worker calls the existing rescue runtime. The single-plugin staging build `1.0.6-native.0.2.0.h7c2e1b9f2128` passed strict validation, six Mod tests, and TypeScript checks. Its catalog exposes one worker, and `/codex:rescue` delegates to it.

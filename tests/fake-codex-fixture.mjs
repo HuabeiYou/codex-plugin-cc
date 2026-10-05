@@ -457,12 +457,12 @@ rl.on("line", (line) => {
         saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 
-        if (BEHAVIOR === "native-stream-task" || BEHAVIOR === "native-failed-task" || BEHAVIOR === "native-edit-task") {
+        if (BEHAVIOR === "native-stream-task" || BEHAVIOR === "native-failed-task" || BEHAVIOR === "native-edit-task" || BEHAVIOR === "native-activity-only-task") {
           state.nativeCommandStarts = (state.nativeCommandStarts || 0) + 1;
           saveState(state);
           send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
           const params = { threadId: thread.id, turnId };
-          if (BEHAVIOR === "native-edit-task") {
+          if (BEHAVIOR === "native-edit-task" || BEHAVIOR === "native-activity-only-task") {
             if (state.lastThreadStart.sandbox !== "workspace-write") throw new Error("File edit needs workspace-write.");
             fs.writeFileSync(path.join(thread.cwd, "native-edit-proof.txt"), "edited by simulated Codex");
             send({ method: "item/completed", params: { ...params, item: { type: "fileChange", id: "edit_once", status: "completed", changes: [{ path: "native-edit-proof.txt", kind: { type: "add" }, diff: "+edited by simulated Codex" }] } } });
@@ -471,6 +471,19 @@ rl.on("line", (line) => {
           send({ method: "item/started", params: { ...params, item: { type: "commandExecution", id: "read_once", command: "cat README.md", status: "inProgress" } } });
           send({ method: "item/commandExecution/outputDelta", params: { ...params, itemId: "read_once", delta: "repository description" } });
           send({ method: "item/completed", params: { ...params, item: { type: "commandExecution", id: "read_once", command: "cat README.md", status: "completed", exitCode: 0 } } });
+          if (BEHAVIOR === "native-activity-only-task") {
+            let ticks = 0;
+            const timer = setInterval(() => {
+              ticks++;
+              send({ method: "item/commandExecution/outputDelta", params: { ...params, itemId: "long_check", delta: "check progress " + ticks } });
+              if (ticks === 12) {
+                clearInterval(timer);
+                send({ method: "item/completed", params: { ...params, item: { type: "agentMessage", id: "native_answer", text: "Read-only answer.", phase: "final_answer" } } });
+                send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "completed") } });
+              }
+            }, 300);
+            break;
+          }
           if (BEHAVIOR === "native-failed-task") {
             send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "failed", { message: "Synthetic provider failure" }) } });
           } else {

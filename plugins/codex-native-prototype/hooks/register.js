@@ -5,10 +5,38 @@ const runs = new Map();
 const spawnRows = new Map();
 const PANE_ID = 'codex-native-activity';
 const AGENT_TYPE = 'codex-native-prototype:worker';
+let selectedAgentId = null;
+let expandedActivity = false;
+let paneViewAgentId;
+let workerPage = 0;
+const WORKERS_PER_PAGE = 5;
 
 /** @returns {import('claude-code').TurnStepResult} */
 function stepResult(e, answer) {
   return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: 'end_turn', usage: null };
+}
+
+function activityText(run, event) {
+  if (event.kind === 'ready') return `Codex${run.model ? ' (' + run.model + ')' : ''} started · Thread ${run.threadId}`;
+  if (event.kind === 'activity') return `${event.threadId && event.threadId !== run.threadId ? '↳ ' + event.threadId + ' · ' : ''}${event.label} [${event.status}]`;
+  return null;
+}
+
+async function recordActivity($, run, text) {
+  if (!text) return;
+  try {
+    // A notice is visible in this child's transcript and adds no model input.
+    const stored = await $.session.append({ agentId: run.agentId,
+      message: { type: 'system', content: [{ type: 'text', text }] } });
+    if (stored.deny) throw new Error(stored.deny);
+  } catch (error) {
+    // A display failure must not interrupt implementation work.
+    run.noticeError = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function workerAnswer(run) {
+  return finalAnswer(run) + (run.noticeError ? `\n\nCodex activity display was unavailable: ${run.noticeError}` : '');
 }
 
 async function stopRun($, run) {
@@ -22,15 +50,21 @@ async function stopRun($, run) {
 }
 
 /** @returns {import('claude-code').RenderElement} */
-function renderActivity($, e, selectedRuns, detailed) {
+function renderActivity($, e, selectedRuns) {
   const { Box, Text, Button } = $.ui.resolve(e);
   return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column', gap: 1 }, ...selectedRuns.map((run) =>
     h(Box, { key: run.id, flexDirection: 'column' },
-      h(Text, { bold: true }, `Codex${run.model ? ' (' + run.model + ')' : ''} · ${run.description} · ${run.status}`),
-      ...(detailed ? [h(Text, { dimColor: true }, `Agent ${run.agentId} · Thread ${run.threadId || 'starting'}`)] : []),
-      ...run.activity.slice(detailed ? -20 : -1).map((activity, i) => h(Text, { key: `${run.id}-${i}`, dimColor: true },
-        `${activity.threadId && activity.threadId !== run.threadId ? '↳ ' + activity.threadId + ' · ' : ''}${activity.label} [${activity.status}]`)),
-      ...(run.error ? [h(Text, { color: 'red' }, run.error)] : []),
+      h(Text, { bold: true, wrap: 'truncate-end' }, `Codex${run.model ? ' (' + run.model + ')' : ''} · ${run.description} · ${run.status}`),
+      h(Text, { dimColor: true, wrap: 'truncate-end' }, `Agent ${run.agentId} · Thread ${run.threadId || 'starting'}`),
+      ...run.activity.slice(expandedActivity ? -20 : -8).map((activity, i) => {
+        const text = activityText(run, activity) || '';
+        return h(Text, { key: `${run.id}-${i}`, dimColor: true, wrap: expandedActivity ? 'wrap' : 'truncate-end' },
+          expandedActivity ? text : text.replace(/\s+/g, ' '));
+      }),
+      ...(run.error && run.status !== 'interrupted' ? [h(Text, { color: 'red' }, run.error)] : []),
+      h(Button, { key: 'expand-activity', label: expandedActivity ? 'Compact activity' : 'Expand activity', onPress: () => {
+        expandedActivity = !expandedActivity; $.ui.invalidate('ui.render');
+      } }),
       ...(run.status === 'running' || run.status === 'starting' ? [h(Button, {
         key: `stop-${run.id}`, label: 'Stop Codex', onPress: () => stopRun($, run)
       })] : [])
@@ -59,6 +93,7 @@ export function register(on) {
       spawnRows.set(spawned.agentId, { toolUseId: e.tool_use_id, prompt: e.prompt, cwd: e.cwd });
       let run = runs.get(spawned.agentId);
       if (!run) { run = createRun(spawned.agentId, e.description || 'Codex task', crypto.randomUUID()); runs.set(spawned.agentId, run); }
+      selectedAgentId ??= spawned.agentId;
       run.toolUseId = e.tool_use_id;
       $.ui.invalidate('ui.render');
     }
@@ -89,7 +124,7 @@ export function register(on) {
     let run = runs.get(e.agentId);
     if (run?.started) {
       // Never rerun a Codex task if Claude's loop unexpectedly requests a retry.
-      const answer = finalAnswer(run);
+      const answer = workerAnswer(run);
       yield { kind: 'text', index: 0, text: answer };
       yield { kind: 'stop', stopReason: 'end_turn', usage: null };
       return stepResult(e, answer);
@@ -108,6 +143,8 @@ export function register(on) {
       if (!Array.isArray(messages)) throw new Error(messages.deny);
       const prompt = row?.prompt || [...messages].reverse().find((message) => message.role === 'user')?.text;
       if (!prompt) throw new Error('The native agent task could not be read.');
+      // Real progress chunks reset Claude's watchdog; UI redraws do not.
+      yield { kind: 'thinking', index: 0, text: 'Starting Codex.\n' };
       await $.ui.open({ id: PANE_ID, title: 'Codex activity' });
       $.ui.invalidate('ui.render');
       stream = $.process.spawn({
@@ -127,14 +164,26 @@ export function register(on) {
         buffer = parsed.buffer;
         for (const event of parsed.events) {
           acceptEvent(run, event);
+          const progress = activityText(run, event);
+          if (progress && !next.signal.aborted) {
+            yield { kind: 'thinking', index: 0, text: progress + '\n' };
+            await recordActivity($, run, progress);
+          }
           $.ui.invalidate('ui.render');
           if (event.kind === 'text') {
             streamed += event.text;
-            yield { kind: 'text', index: 0, text: event.text };
+            yield { kind: 'text', index: 1, text: event.text };
           }
         }
       }
-      if (buffer.trim()) for (const event of readEvents(buffer, '', true).events) acceptEvent(run, event);
+      if (buffer.trim()) for (const event of readEvents(buffer, '', true).events) {
+        acceptEvent(run, event);
+        const progress = activityText(run, event);
+        if (progress && !next.signal.aborted) {
+          yield { kind: 'thinking', index: 0, text: progress + '\n' };
+          await recordActivity($, run, progress);
+        }
+      }
       if (next.signal.aborted) run.status = 'interrupted';
     } catch (error) {
       run.status = next.signal.aborted ? 'interrupted' : 'failed';
@@ -143,9 +192,9 @@ export function register(on) {
       if (stream) await stream.return({ code: null, signal: 'SIGTERM' });
       $.ui.invalidate('ui.render');
     }
-    const answer = finalAnswer(run);
-    if (!streamed) yield { kind: 'text', index: 0, text: answer };
-    else if (answer !== streamed) yield { kind: 'text', index: 0, text: '\n\n' + answer };
+    const answer = workerAnswer(run);
+    if (!streamed) yield { kind: 'text', index: 1, text: answer };
+    else if (answer !== streamed) yield { kind: 'text', index: 1, text: answer.startsWith(streamed) ? answer.slice(streamed.length) : '\n\n' + answer };
     yield { kind: 'stop', stopReason: 'end_turn', usage: null };
     return stepResult(e, answer);
   }).catch(async function* ($, e, next) {
@@ -154,7 +203,7 @@ export function register(on) {
     if (!run) return yield* next(e);
     run.status = next.signal.aborted ? 'interrupted' : 'failed';
     run.error = next.error.message;
-    const answer = finalAnswer(run);
+    const answer = workerAnswer(run);
     yield { kind: 'text', index: 0, text: answer };
     yield { kind: 'stop', stopReason: 'end_turn', usage: null };
     return stepResult(e, answer);
@@ -184,13 +233,33 @@ export function register(on) {
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE_ID) return next(e);
-    return renderActivity($, e, [...runs.values()].slice(-8), true);
-  });
-  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    const run = [...runs.values()].find((candidate) => candidate.toolUseId === e.requestId);
-    if (!run) return next(e);
-    const { Box } = $.ui.resolve(e);
-    return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column' }, await next(e), renderActivity($, e, [run], false)));
+    const workers = [...runs.values()];
+    if (paneViewAgentId !== e.props.view.agentId) {
+      paneViewAgentId = e.props.view.agentId;
+      if (runs.has(paneViewAgentId)) {
+        selectedAgentId = paneViewAgentId;
+        workerPage = Math.floor(workers.findIndex((run) => run.agentId === selectedAgentId) / WORKERS_PER_PAGE);
+        expandedActivity = false;
+      }
+    }
+    const selected = runs.get(selectedAgentId) || workers[0];
+    const pages = Math.max(1, Math.ceil(workers.length / WORKERS_PER_PAGE));
+    workerPage = Math.min(workerPage, pages - 1);
+    const { Box, Text, Button } = $.ui.resolve(e);
+    return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column', gap: 1 },
+      h(Text, { bold: true }, `${workers.length} Codex worker${workers.length === 1 ? '' : 's'}`),
+      ...workers.slice(workerPage * WORKERS_PER_PAGE, (workerPage + 1) * WORKERS_PER_PAGE).map((run, i) => h(Button, { key: `select-${run.agentId}`, plain: true,
+        label: `${selected === run ? '› ' : '  '}${run.description.replace(/\s+/g, ' ').slice(0, 42)} · ${run.status}`,
+        hotkey: String(i + 1),
+        onPress: () => { selectedAgentId = run.agentId; expandedActivity = false; $.ui.invalidate('ui.render'); }
+      })),
+      ...(pages > 1 ? [h(Box, { flexDirection: 'row', gap: 1 },
+        h(Button, { key: 'previous-workers', label: 'Previous workers', onPress: () => { workerPage = (workerPage + pages - 1) % pages; $.ui.invalidate('ui.render'); } }),
+        h(Text, {}, `${workerPage + 1}/${pages}`),
+        h(Button, { key: 'next-workers', label: 'Next workers', onPress: () => { workerPage = (workerPage + 1) % pages; $.ui.invalidate('ui.render'); } })
+      )] : []),
+      ...(selected ? [renderActivity($, e, [selected])] : [h(Text, { dimColor: true }, 'No Codex workers yet.')])
+    ));
   });
   return undefined;
 }
