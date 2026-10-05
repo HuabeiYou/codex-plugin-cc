@@ -2,7 +2,7 @@
 description: Run a Codex code review against local git state
 argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]'
 disable-model-invocation: true
-allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
+allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), TaskOutput, TaskStop, AskUserQuestion
 ---
 
 Run a Codex review through the shared built-in reviewer.
@@ -57,5 +57,6 @@ Bash({
   run_in_background: true
 })
 ```
-- Do not call `BashOutput` or wait for completion in this turn.
-- After launching the command, tell the user: "Codex review started in the background. Check `/codex:status` for progress."
+- Retain the returned native task handle and output file path. Apply the `codex-job-supervision` skill to monitor the review, read completion feedback automatically, and return the completed review. Keep the request review-only.
+- Tell the user the review is running and that you will read and deliver its result. A background launch or wait timeout does not complete the review request.
+- If a foreground call is auto-backgrounded or times out, apply the same supervision rule. Do not call `BashOutput`; use native completion feedback and `Read` on the harness output path, or a bounded wait on the confirmed companion job.

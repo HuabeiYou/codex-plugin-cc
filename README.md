@@ -100,7 +100,7 @@ Examples:
 /codex:review --background
 ```
 
-This command is read-only and will not perform any changes. When run in the background you can use [`/codex:status`](#codexstatus) to check on the progress and [`/codex:cancel`](#codexcancel) to cancel the ongoing task.
+This command is read-only and will not perform any changes. Claude monitors background reviews and reads their results automatically. For optional inspection, you can use [`/codex:status`](#codexstatus) to check on the progress and [`/codex:cancel`](#codexcancel) to cancel the ongoing task.
 
 ### `/codex:adversarial-review`
 

@@ -91,7 +91,7 @@ test("rescue command absorbs continue semantics", () => {
   const runtimeSkill = read("skills/codex-cli-runtime/SKILL.md");
 
   assert.match(rescue, /The final user-visible response must be Codex's output verbatim/i);
-  assert.match(rescue, /allowed-tools:\s*Bash\(node:\*\),\s*AskUserQuestion,\s*Agent/);
+  assert.match(rescue, /allowed-tools:\s*Bash\(node:\*\),\s*Read,\s*TaskOutput,\s*TaskStop,\s*AskUserQuestion,\s*Agent/);
   // Regression for #234: `Skill(codex:rescue)` from the main agent recursed
   // because rescue.md named the routing with ambiguous prose ("Route this
   // request to the `codex:codex-rescue` subagent") while running under
@@ -248,11 +248,10 @@ test("rescue contracts stop after Bash auto-backgrounding instead of inventing p
   assert.match(source, /invoke `task` once/i);
   assert.match(read("agents/codex-rescue.md"), /fallback takes precedence over the normal stdout-only response and Bash-failure rules/i);
   const rescue = read("commands/rescue.md");
-  assert.match(rescue, /return that message unchanged and stop/i);
-  assert.match(rescue, /harness task ID is not a companion job ID/i);
-  assert.match(rescue, /list jobs with `\/codex:status` and confirm the matching companion job ID/i);
-  assert.match(rescue, /If the matching job is unclear, use `AskUserQuestion`/i);
-  assert.match(rescue, /Never create a shell wait loop or use process-name polling.*pgrep/i);
+  assert.match(rescue, /continue supervision automatically/i);
+  assert.match(rescue, /The forwarding agent stops; the parent stays responsible/i);
+  assert.match(rescue, /codex-job-supervision/);
+  assert.doesNotMatch(rescue, /later user-requested wait|For a later status request/i);
 });
 
 test("status waiting uses a companion job ID and a bounded runtime call", () => {
@@ -261,4 +260,23 @@ test("status waiting uses a companion job ID and a bounded runtime call", () => 
   assert.match(status, /harness task ID is not a companion job ID/i);
   assert.match(status, /Present the returned snapshot when the bounded wait ends/i);
   assert.match(status, /Never create a shell wait loop or use process-name polling.*pgrep/i);
+});
+
+test("parents supervise every Codex launch and consume results without user status requests", () => {
+  const supervision = read("skills/codex-job-supervision/SKILL.md");
+  for (const name of ["rescue", "review", "adversarial-review"]) {
+    const source = read(`commands/${name}.md`);
+    assert.match(source, /codex-job-supervision/);
+    assert.doesNotMatch(source, /Check `\/codex:status` for progress/);
+  }
+  assert.match(supervision, /Keep the user's task pending/);
+  assert.match(supervision, /issue another bounded wait/);
+  assert.match(supervision, /result <job-id>/);
+  assert.match(supervision, /do not ask the user to identify your subagent/);
+  assert.match(supervision, /every required owned job has a result you have read and handled/);
+  assert.match(supervision, /Never create shell wait loops/);
+  const native = fs.readFileSync(path.join(ROOT, "plugins/codex-native-prototype/skills/codex-native-supervision/SKILL.md"), "utf8");
+  assert.match(native, /Read the full report/);
+  assert.match(native, /check the report's content before treating it as success/);
+  assert.match(native, /user does not need to request status or result retrieval/);
 });

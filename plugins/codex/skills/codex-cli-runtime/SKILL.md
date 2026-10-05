@@ -42,7 +42,7 @@ Prompt assembly:
 
 Background and timeout fallback:
 
-- If the Bash harness moves the call to the background or reports a timeout, return the harness message unchanged and stop. This is the fallback when final companion stdout is unavailable; it takes precedence over the normal stdout-only response and Bash-failure rules.
+- If the Bash harness moves the call to the background or reports a timeout, return the harness message unchanged and stop. Your handoff ends here; the parent continues supervision with `codex-job-supervision`. This is the fallback when final companion stdout is unavailable; it takes precedence over the normal stdout-only response and Bash-failure rules.
 - The harness task ID is not a companion job ID. Preserve the harness handle exactly; do not invent a companion job ID or suggest `/codex:status` for that handle.
 - For an explicit companion `task --background` launch, return the companion's printed job ID and status suggestion unchanged and stop.
 - Never create a shell wait loop or use process-name polling (`pgrep`, `ps | grep`, `watch`, `tail`) to recover output. Such matches can include sibling waiters and unrelated jobs. Do not issue a second Bash call, retry the task, or read a task output file.

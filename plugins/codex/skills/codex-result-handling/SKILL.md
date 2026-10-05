@@ -14,8 +14,8 @@ When the helper returns Codex output:
 - Preserve output sections when the prompt asked for them, such as observed facts, inferences, open questions, touched files, or next steps.
 - If there are no findings, say that explicitly and keep the residual-risk note brief.
 - If Codex made edits, say so explicitly and list the touched files when the helper provides them.
-- For `codex:codex-rescue`, do not turn a failed or incomplete Codex run into a Claude-side implementation attempt. Report the failure and stop.
+- For `codex:codex-rescue`, do not turn a failed or incomplete Codex run into a Claude-side implementation attempt disguised as Codex output. The parent applies `codex-job-supervision`, reads errors and partial work, and continues only within the user's authorized scope.
 - For `codex:codex-rescue`, if Codex was never successfully invoked, do not generate a substitute answer at all.
-- CRITICAL: After presenting review findings, STOP. Do not make any code changes. Do not fix any issues. You MUST explicitly ask the user which issues, if any, they want fixed before touching a single file. Auto-applying fixes from a review is strictly forbidden, even if the fix is obvious.
-- If the helper reports malformed output or a failed Codex run, include the most actionable stderr lines and stop there instead of guessing.
+- For a review-only request, present the findings and finish without code changes. If the current user request already authorizes fixes, the parent may use review feedback to continue that authorized work. Ask for approval only for work outside the existing scope.
+- If the helper reports malformed output or a failed Codex run, preserve the most actionable stderr lines. The parent handles that failure under `codex-job-supervision`; it does not guess a successful result.
 - If the helper reports that setup or authentication is required, direct the user to `/codex:setup` and do not improvise alternate auth flows.

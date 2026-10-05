@@ -1,12 +1,12 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Codex rescue subagent
 argument-hint: "[--background|--wait] [--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [what Codex should investigate, solve, or continue]"
-allowed-tools: Bash(node:*), AskUserQuestion, Agent
+allowed-tools: Bash(node:*), Read, TaskOutput, TaskStop, AskUserQuestion, Agent
 ---
 
 Invoke the `codex:codex-rescue` subagent via the `Agent` tool (`subagent_type: "codex:codex-rescue"`), forwarding the raw user request as the prompt.
 `codex:codex-rescue` is a subagent, not a skill — do not call `Skill(codex:codex-rescue)` (no such skill) or `Skill(codex:rescue)` (that re-enters this command and hangs the session). The command runs inline so the `Agent` tool stays in scope; forked general-purpose subagents do not expose it.
-The final user-visible response must be Codex's output verbatim.
+The final user-visible response must be Codex's output verbatim once the delegated job has reached a terminal state and its full result has been read.
 
 Raw user request:
 $ARGUMENTS
@@ -40,10 +40,8 @@ Operating rules:
 
 - The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" task ...` and return that command's stdout as-is.
 - Return the Codex companion stdout verbatim to the user.
-- If the subagent returns a Bash harness background/timeout message instead of final companion stdout, return that message unchanged and stop. This fallback takes precedence over the normal stdout-only response rule. The harness task ID is not a companion job ID; use Claude's native task controls for that handle, not `/codex:status`.
-- A foreground run also saves a companion job before Codex starts, even when its ID is not printed. For a later status request, list jobs with `/codex:status` and confirm the matching companion job ID from the task summary and start time. If the matching job is unclear, use `AskUserQuestion` to ask the user to select it.
-- For a confirmed companion job ID, a later user-requested wait uses `/codex:status <job-id> --wait --timeout-ms 30000`. The wait is bounded and specific to that job.
-- Never create a shell wait loop or use process-name polling (`pgrep`, `ps | grep`) to wait for Codex or recover output; sibling waiters and unrelated jobs can match.
+- You own the delegated job through completion and reading its feedback. Apply the `codex-job-supervision` skill after launch, background execution, timeout, and completion feedback.
+- If the forwarding subagent returns a harness background/timeout message, retain the handle and output file path and continue supervision automatically. The forwarding agent stops; the parent stays responsible. This takes precedence over treating the wrapper's message as the final result.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Do not ask the subagent to inspect files, monitor progress, poll `/codex:status`, fetch `/codex:result`, call `/codex:cancel`, summarize output, or do follow-up work of its own.
 - Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.

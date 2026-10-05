@@ -42,7 +42,7 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.agent.register({
       name: 'worker',
-      description: 'Use Codex for a read-only investigation, code review, or second opinion, with live activity. This prototype cannot edit files.',
+      description: 'Use Codex for a read-only investigation, code review, or second opinion, with live activity. This prototype cannot edit files. Before delegating, apply codex-native-prototype:codex-native-supervision; retain its task handle, read completion feedback, and complete the user task.',
       prompt: 'Carry out the delegated read-only task. The Codex mod supplies your response.',
       tools: [],
       maxTurns: 1

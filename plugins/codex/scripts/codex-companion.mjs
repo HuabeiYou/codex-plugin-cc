@@ -660,7 +660,11 @@ async function runForegroundCommand(job, runner, options = {}) {
     logFile: options.logFile,
     stderr: !options.json
   });
-  const execution = await runTrackedJob(job, () => runner(progress), { logFile });
+  const execution = await runTrackedJob(job, () => {
+    // Persisted by runTrackedJob before this callback. Keep stdout as final output.
+    progress?.(`Companion job ID: ${job.id}`);
+    return runner(progress);
+  }, { logFile });
   outputResult(options.json ? execution.payload : execution.rendered, options.json);
   if (execution.exitStatus !== 0) {
     process.exitCode = execution.exitStatus;

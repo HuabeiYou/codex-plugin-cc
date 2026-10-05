@@ -327,6 +327,37 @@ test("transfer rejects sources outside the Claude projects directory", () => {
   assert.match(result.stderr, /only from .*\.claude.*projects/);
 });
 
+test("foreground task exposes its persisted job ID without changing final stdout", async () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "interruptible-slow-task");
+  initGitRepo(repo);
+  const stateDir = resolveStateDir(repo);
+  const child = spawn(process.execPath, [SCRIPT, "task", "--", "Check this task"], { cwd: repo, env: buildEnv(binDir) });
+  let stderr = "";
+  let stdout = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  const exited = new Promise((resolve) => child.on("close", resolve));
+  try {
+    const id = await waitFor(() => stderr.match(/Companion job ID: (task-[^\s]+)/)?.[1]);
+    const snapshot = run("node", [SCRIPT, "status", id, "--json"], { cwd: repo });
+    assert.equal(snapshot.status, 0, snapshot.stderr);
+    assert.equal(JSON.parse(snapshot.stdout).job.status, "running");
+    assert.equal(stdout, "");
+    const cancelled = run("node", [SCRIPT, "cancel", id, "--json"], { cwd: repo });
+    assert.equal(cancelled.status, 0, cancelled.stderr);
+    await exited;
+    assert.doesNotMatch(stdout, /Companion job ID:/);
+  } finally {
+    child.kill();
+    await exited;
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(binDir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("task reports the actual Codex auth error when the run is rejected", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();

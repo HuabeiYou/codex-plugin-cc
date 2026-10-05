@@ -40,7 +40,7 @@ claude --plugin-dir ./plugins/codex --plugin-dir ./plugins/codex-native-prototyp
 
 Use `/codex-native` for the native Mod. Use `/codex:rescue` for the patched official forwarding agent. Both plugin directories must stay in this repository layout.
 
-After a rescue background or timeout message, the forwarding agent returns that message and stops. For a later status check, use `/codex:status` to find the matching companion job, then `/codex:status <job-id> --wait --timeout-ms 30000`. Use the saved companion job ID. Claude's task handle identifies a different task. A running snapshot after the timeout means the job is still active.
+Claude owns each Codex agent it spawns. It retains task handles, reads completion feedback, and continues your task automatically. A rescue forwarding agent stops after returning launch or timeout feedback; the parent continues supervision. Detached companion jobs use repeated bounded waits on their exact job IDs until a terminal result is read. Native Mod workers use Claude's Agent completion feedback. Status commands and the activity pane are available for optional inspection; you do not need to request progress or result retrieval.
 
 Evaluate this revision through normal use for a few days. If a wait remains stuck, retain the command, returned message, selected job ID, and status snapshot so the failure can be traced. Automated instruction and runtime checks do not establish that Claude always follows the instructions. This trial does not change installed plugins or global settings.
 
