@@ -1,3 +1,63 @@
+# Activated local release (2026-10-06)
+
+After the user exited Claude, `codex@huabei-codex` was updated at user scope to `1.0.6-native.0.2.5.h0c082bf8577a`. The installed version and the local marketplace folder match. Final validation passed **131/131** Node tests, **17/17** bundled Mod tests, all **five** real Claude lifecycle scenarios with simulated Codex, strict marketplace/package validation, and the runtime and bundle TypeScript builds. The topic scenario again proved three workers handling five turns and all three completed conversations archived.
+
+The documented bundle validation initially reached its final TypeScript step without the generated Claude Mod API declarations. The generator now retains those local declarations when available; deterministic generation and isolated bundle execution passed again, and `npm run bundle:test` completed without a manual copy step. A fresh checkout must load the native plugin once to generate the declarations, as documented in `SINGLE-PLUGIN.md`.
+
+Obsolete staging bundles can be removed after activation. The entries below are historical acceptance records; their staged versions and installation states describe those earlier checks. Real-provider cache savings and model adherence to the delegation instructions remain unmeasured.
+
+# Topic conversations (2026-10-06)
+
+The staged candidate is `1.0.6-native.0.2.5.h456c156bf47f` in `output/codex-topic-reuse-staging`. Claude retains one native worker per topic. Implementation adjustments and review or adversarial re-review rounds use `SendMessage` to the original worker. New topics and independent reviews get fresh workers. Native review commands are included in the single-plugin bundle; review follow-ups retain their read-only boundary.
+
+Each feedback request appends a turn to the exact Codex thread. Completed checkpoint replay stays idempotent, new transcript input is recognized even if Claude retains the same turn ID, and resumed workers reactivate their existing pane entry. Session-end cleanup archives completed owned conversations only when workers are idle; active, interrupted, and other-session work is excluded. Reports and history remain saved, and subsequent feedback unarchives the exact conversation. Cleanup is best effort on shutdown.
+
+Validation: the full Node suite passed **131/131**, followed by **4/4** focused continuation/cleanup checks after the final runtime refinements. Source and staged Mod suites passed **17/17** each. Source/runtime/staged TypeScript checks, strict source/marketplace/package validation, deterministic regeneration, and isolated bundled execution passed. Both source and staged acceptance passed all **five** real Claude lifecycle scenarios with simulated Codex and no Claude model calls. The topic scenario proved **three workers, five turns, and three archived conversations**, with both implementation feedback and adversarial re-review routed to their original worker and thread after an unrelated topic intervened.
+
+The real terminal agents-view handoff also passed in **4.176 seconds**: the original app-server exited before restoration, the worker and Codex thread identities stayed the same, and the parent read the full report after adoption. The first attempt was blocked by sandbox-denied process inspection. A subsequent run completed the handoff but exposed the test observer's assumption that every pipe chunk held one JSON object. The observer now reconstructs JSONL across chunk boundaries; the final isolated run passed with process inspection enabled and provider traffic blocked. No user sessions or installed plugin files were changed.
+
+The installed `0.2.3` package remains untouched. Activate this candidate after finishing delegated work and closing Claude sessions, using `SINGLE-PLUGIN.md`. These checks verify routing, lifecycle, and archival behavior; they do not measure real-provider cache savings or whether a live Claude model follows the delegation instructions reliably.
+
+# Human-readable command feedback (2026-10-06)
+
+The current staged revision is `1.0.6-native.0.2.4.h93352ebba35e`. `/codex-native-status` now opens the activity pane and replies only `Opened Codex activity.` It no longer prints a duplicate worker list or opaque agent IDs. Routine launch, stop, startup, and child-activity notices also avoid IDs; stop feedback names the task. IDs remain in structured runtime records and explicitly expanded diagnostics. Missing stop arguments direct users to the pane's Stop Codex button.
+
+The source Mod tests pass **14/14**, including the command-output regression and ID-free progress notices. The focused panel/bundle Node tests pass **14/14**, including deterministic generation and an isolated bundle run. An actual isolated Claude terminal trial with simulated Codex verified the short acknowledgement at 160 and 48 columns. The captured renderer files are byte-identical to this final staged revision; its different hash reflects the finalized tests. The prior full **129/129** Node result remains the broader baseline; it was not repeated for these presentation-only changes. The installed package remains untouched.
+
+---
+
+# Activity panel polish (2026-10-06)
+
+The polished `0.2.4` candidate supersedes the first layout candidate below. The current package at `output/codex-agent-layout-staging` is `1.0.6-native.0.2.4.h600c2e104485`.
+
+Every active agent now has a task subtitle beneath its model/thinking header, including agents that are not selected. The selected activity remains attached to that row. Compact display combines start/completion and output updates using typed thread, turn, item, and activity identities; separate commands and child threads remain distinct. Expanded display retains the original events and reveals agent/thread IDs. Controls share a row and wrap. Short panes reduce page size and recent-event count so the folded history remains reachable; narrow headers retain model, thinking level, and status.
+
+History is ordered by completion with the newest first, and its folded heading reports failures. The `p` shortcut toggles history. Paging selects a visible row and stops at the first/last page. Roster changes keep the selected active agent on screen. Expansion is remembered per agent, with parent and worker views owning separate selection. A worker's own view retains its activity when it finishes; the parent continues to prioritize active work.
+
+Validation passed: **129/129 Node tests** in 131.8 seconds, **13/13 source Mod tests**, **13/13 staged Mod tests**, source/staged TypeScript checks, strict marketplace/plugin validation, deterministic bundle regeneration, and `git diff --check`. Regression coverage includes page-boundary completion, per-view selection and expansion, completion ordering, interrupted resumption, identity-safe activity compression, narrow headers, and shorter viewports.
+
+The staged package passed all four real Claude lifecycle scenarios with simulated Codex and zero Claude model requests: foreground implementation (`2036fce6-1a22-4405-a5a7-cca73644211a`), background report retrieval (`32485f85-4987-4bd1-90af-7c8afc9bee1b`), TaskStop (`a9edc2d6-c476-4202-8c75-4e9336b0ff3b`), and activity-only watchdog protection (`c46e15ba-c1ab-4043-955c-3c5e4984f119`). All owned app-server processes exited.
+
+A separate isolated Claude Code 2.1.292 terminal trial exercised two running workers and one completed worker, opened/folded history with its actual keyboard shortcut, and resized from 160 to 48 columns. It captured the actual terminal cells with simulated Codex and blocked Claude provider requests. The final trial verified that the folded history stays visible at 48 columns. Captures are in `output/codex-agent-layout-preview`. An earlier narrow capture exposed the clipped footer and led to the adaptive height change. The first attempts did not render an automatically opened pane below Claude's 144-column unrequested-pane threshold; using a wide terminal and the explicit status command resolved this test setup issue. Those failed capture attempts are not counted as successful visual checks.
+
+The installed `0.2.3` package and running user sessions remain untouched. Apply the update after finishing active work and closing Claude, as described in `SINGLE-PLUGIN.md`.
+
+---
+
+# Active agents and folded history (2026-10-06)
+
+The `0.2.4` candidate is staged in `output/codex-agent-layout-staging` as `1.0.6-native.0.2.4.h2a40403f560e`. Active agents appear before a folded **Previous agents** list. Starting, running, and stopping agents remain active; completed, failed, and interrupted agents enter history. Each group pages independently in sets of five. Opening a finished worker's own view reveals its history entry.
+
+Active row headers show the runtime's resolved model, thinking effort, and status. Explicit turn effort takes precedence over the thread's configured effort; unresolved effort displays `default`. The selected task and activity appear directly within that row, without a repeated activity heading. When the selected worker finishes while history is folded, the pane selects another active worker or shows the folded history alone.
+
+Validation passed: **117/117 Node tests**, **12/12 source Mod tests**, and **12/12 staged Mod tests** on terminal and desktop test surfaces. Coverage includes mixed terminal states, live completion transitions, default-folded history, independent pagination, attached activity, a single model header, explicit/default effort metadata, stop-in-progress classification, and terminal control sanitization. Source and staged TypeScript checks, strict plugin/marketplace validation, deterministic bundle regeneration, and `git diff --check` passed.
+
+The staged bundle also passed all four real Claude lifecycle scenarios with simulated Codex and zero Claude model requests: foreground implementation (`d5438b3c-b4c1-478a-8f6e-b4979b2fd08c`), background report retrieval (`0394ece7-649f-423b-8bc4-bce4040d0246`), TaskStop (`372bc41b-711a-44c6-9a44-0fbe1bab49a0`), and activity-only watchdog protection (`27eb318e-c0f8-4d49-99e6-9c0cf899e544`). All owned app-server processes exited. These are lifecycle and renderer checks, not a visual trial in the user's current session.
+
+The installed local marketplace is still `0.2.3`, and a Claude session is running. The candidate does not replace its live package. Finish delegated work and close Claude sessions before rebuilding the local marketplace and applying the update described in `SINGLE-PLUGIN.md`.
+
+---
+
 # Expanded activity rendering fix (2026-10-05)
 
 The `0.2.3` candidate is staged in `output/codex-pane-staging`. The reported worker's retained activity notices contain ANSI escape characters. Claude rejects the whole pane when a text leaf contains a terminal control character. Compact mode can hide a carriage return by collapsing whitespace; expanded mode previously passed it through. New activity changes the visible history, so the pane can alternate between a valid and a rejected tree.

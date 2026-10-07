@@ -1,15 +1,12 @@
 // Claude manages the Agent; the shared rescue runtime executes its task.
-import { createRun, acceptEvent, readEvents, finalAnswer, displayText } from './protocol.mjs';
+import { createRun, acceptEvent, readEvents, finalAnswer, displayText, setRunStatus } from './protocol.mjs';
+import { PaneState, paneActivity, displayLine, agentHeader, PAGE_SIZE } from './panel.mjs';
 
 const runs = new Map();
 const spawnRows = new Map();
 const PANE_ID = 'codex-native-activity';
 const AGENT_TYPE = 'codex-native-prototype:worker';
-let selectedAgentId = null;
-let expandedActivity = false;
-let paneViewAgentId;
-let workerPage = 0;
-const WORKERS_PER_PAGE = 5;
+const paneStates = new Map();
 
 /** @returns {import('claude-code').TurnStepResult} */
 function stepResult(e, answer) {
@@ -17,8 +14,8 @@ function stepResult(e, answer) {
 }
 
 function activityText(run, event) {
-  if (event.kind === 'ready') return `Codex${run.model ? ' (' + run.model + ')' : ''} started · Thread ${run.threadId}`;
-  if (event.kind === 'activity') return `${event.threadId && event.threadId !== run.threadId ? '↳ ' + event.threadId + ' · ' : ''}${event.label} [${event.status}]`;
+  if (event.kind === 'ready') return `Codex${run.model ? ' (' + run.model + ')' : ''} started.`;
+  if (event.kind === 'activity') return `${event.threadId && event.threadId !== run.threadId ? '↳ ' : ''}${event.label} [${event.status}]`;
   return null;
 }
 
@@ -44,31 +41,32 @@ async function stopRun($, run) {
   const result = await $.process.run(['node', `${$.plugin.root}/scripts/bridge.mjs`, 'cancel', run.id]);
   if (result.exitCode !== 0) { $.ui.toast('Could not stop Codex: ' + result.stderr); return; }
   if (JSON.parse(result.stdout).requested) {
-    run.status = 'stopping';
+    setRunStatus(run, 'stopping');
     $.ui.invalidate('ui.render');
   }
 }
 
 /** @returns {import('claude-code').RenderElement} */
-function renderActivity($, e, selectedRuns) {
+function renderActivity($, e, run, state, compactLimit) {
   const { Box, Text, Button } = $.ui.resolve(e);
-  return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column', gap: 1 }, ...selectedRuns.map((run) =>
-    h(Box, { key: run.id, flexDirection: 'column' },
-      h(Text, { bold: true, wrap: 'truncate-end' }, displayText(`Codex${run.model ? ' (' + run.model + ')' : ''} · ${run.description} · ${run.status}`)),
-      h(Text, { dimColor: true, wrap: 'truncate-end' }, displayText(`Agent ${run.agentId} · Thread ${run.threadId || 'starting'}`)),
-      ...run.activity.slice(expandedActivity ? -20 : -8).map((activity, i) => {
-        const text = displayText(activityText(run, activity));
-        return h(Text, { key: `${run.id}-${i}`, dimColor: true, wrap: expandedActivity ? 'wrap' : 'truncate-end' },
-          expandedActivity ? text : text.replace(/\s+/g, ' '));
-      }),
-      ...(run.error && run.status !== 'interrupted' ? [h(Text, { color: 'red' }, displayText(run.error))] : []),
-      h(Button, { key: 'expand-activity', label: expandedActivity ? 'Compact activity' : 'Expand activity', onPress: () => {
-        expandedActivity = !expandedActivity; $.ui.invalidate('ui.render');
-      } }),
+  const expanded = state.expandedAgents.has(run.agentId);
+  const activity = paneActivity(run, expanded, compactLimit);
+  return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column' },
+    ...(expanded ? [h(Text, { key: `identity-${run.agentId}`, dimColor: true, wrap: 'truncate-end' },
+      displayText(`Agent ${run.agentId} · Thread ${run.threadId || 'starting'}`))] : []),
+    ...activity.map((entry) => h(Text, { key: entry.key, dimColor: entry.dim,
+      ...(entry.failed ? { color: 'red' } : {}), wrap: expanded ? 'wrap' : 'truncate-end' }, entry.text)),
+    ...(!activity.length && (expanded || compactLimit > 0) ? [h(Text, { dimColor: true }, run.status === 'starting' ? 'Starting Codex…'
+      : run.status === 'running' ? 'Waiting for activity…' : run.status === 'stopping' ? 'Stopping Codex…' : 'No activity recorded.')] : []),
+    ...(run.error && run.status !== 'interrupted' ? [h(Text, { color: 'red', wrap: 'wrap' }, displayText(run.error))] : []),
+    h(Box, { key: `actions-${run.agentId}`, flexDirection: 'row', flexWrap: 'wrap', gap: 1 },
+      ...(run.activity.length ? [h(Button, { key: 'expand-activity', label: expanded ? 'Compact activity' : 'Expand activity',
+        onPress: () => { state.toggleActivity(run.agentId); $.ui.invalidate('ui.render'); } })] : []),
       ...(run.status === 'running' || run.status === 'starting' ? [h(Button, {
         key: `stop-${run.id}`, label: 'Stop Codex', onPress: () => stopRun($, run)
       })] : [])
-    ))));
+    )
+  ));
 }
 
 /** @type {import('claude-code').Register} */
@@ -83,9 +81,36 @@ export function register(on) {
     return result;
   });
   on('session.end', async ($, e, next) => {
+    // A host handoff can end one session while its workers are being adopted.
+    // Archive only fully delivered work, after all owned workers are idle.
+    if (e.reason !== 'resume' && ![...runs.values()].some((run) => ['starting', 'running', 'stopping'].includes(run.status))) {
+      const runIds = /** @type {string[] | undefined} */ (await $.store.get(`native-workers:${e.sessionId}`));
+      if (runIds?.length) {
+        try {
+          await $.process.run(['node', `${$.plugin.root}/scripts/bridge.mjs`, 'archive', JSON.stringify({ runIds, sessionId: e.sessionId })], {
+            env: { CODEX_COMPANION_SESSION_ID: e.sessionId }
+          });
+        } catch { /* Cleanup is best effort; retained checkpoints remain resumable. */ }
+      }
+    }
     try { await $.process.run(['node', `${$.plugin.root}/scripts/native-ready-server.mjs`, '--clear']); }
     catch { /* The host may already be shutting down. Its identity expires. */ }
     return next(e);
+  });
+
+  on('session.receive', async ($, e, next) => {
+    if (!e.agentId) return next(e);
+    const key = `native-run:${e.agentId}`;
+    const saved = /** @type {{ id?: string, feedback?: Array<{ id: string, prompt: string }> } | undefined} */ (await $.store.get(key));
+    if (!saved?.id) return next(e);
+    const feedback = { id: crypto.randomUUID(), prompt: e.text };
+    await $.store.set(key, { ...saved, feedback: [...(saved.feedback || []), feedback] });
+    const delivered = await next(e);
+    if (delivered.consumed) {
+      const current = /** @type {typeof saved} */ (await $.store.get(key));
+      if (current) await $.store.set(key, { ...current, feedback: (current.feedback || []).filter((item) => item.id !== feedback.id) });
+    }
+    return delivered;
   });
 
   on('agent.spawn', { subagentType: AGENT_TYPE }, async ($, e, next) => {
@@ -94,7 +119,6 @@ export function register(on) {
       spawnRows.set(spawned.agentId, { toolUseId: e.tool_use_id, prompt: e.prompt, cwd: e.cwd });
       let run = runs.get(spawned.agentId);
       if (!run) { run = createRun(spawned.agentId, e.description || 'Codex task', crypto.randomUUID()); runs.set(spawned.agentId, run); }
-      selectedAgentId ??= spawned.agentId;
       run.toolUseId = e.tool_use_id;
       $.ui.invalidate('ui.render');
     }
@@ -138,8 +162,15 @@ export function register(on) {
     const agents = await $.agent.list();
     const agent = agents.find((candidate) => candidate.id === e.agentId && candidate.type === AGENT_TYPE);
     if (!agent) return yield* next(e);
+    const saved = /** @type {{ id?: string, pluginData?: string, prompt?: string, requestId?: string, inputSignature?: string, feedback?: Array<{ id: string, prompt: string }> } | undefined} */ (await $.store.get(`native-run:${e.agentId}`));
+    const messages = await $.session.messages({ agentId: e.agentId });
+    const inputs = Array.isArray(messages) ? messages.filter((message) => message.role === 'user' && message.text.trim()) : [];
+    const latestInput = inputs[inputs.length - 1]?.text;
+    const inputSignature = latestInput ? JSON.stringify([inputs.length, latestInput]) : saved?.inputSignature;
+    const freshInput = Boolean(saved?.inputSignature && inputSignature !== saved.inputSignature);
+    const pending = saved?.feedback || [];
     let run = runs.get(e.agentId);
-    if (run?.started && run.claudeTurnId === e.turnId) {
+    if (run?.started && run.claudeTurnId === e.turnId && !pending.length && !freshInput) {
       // Never rerun a Codex task if Claude's loop unexpectedly requests a retry.
       const answer = workerAnswer(run);
       yield { kind: 'text', index: 0, text: answer };
@@ -149,11 +180,10 @@ export function register(on) {
     run ??= createRun(e.agentId, agent.description, crypto.randomUUID());
     // Claude's agents view checkpoints a child and resumes it in another host.
     // Keep the bridge identity across that handoff, scoped to this plugin/agent.
-    const saved = /** @type {{ id?: string, pluginData?: string, prompt?: string } | undefined} */ (await $.store.get(`native-run:${e.agentId}`));
     if (saved?.id) { run.id = saved.id; run.pluginData = saved.pluginData; }
     run.started = true;
     run.claudeTurnId = e.turnId;
-    run.status = 'starting';
+    setRunStatus(run, 'starting');
     run.result = null;
     run.error = null;
     run.answer = '';
@@ -165,12 +195,9 @@ export function register(on) {
     let stderr = '';
     let stream;
     try {
-      let prompt = row?.prompt || saved?.prompt;
-      if (!prompt) {
-        const messages = await $.session.messages({ agentId: e.agentId });
-        if (!Array.isArray(messages)) throw new Error(messages.deny);
-        prompt = [...messages].reverse().find((message) => message.role === 'user')?.text;
-      }
+      const prompt = pending.length ? pending.map((item) => item.prompt).join('\n\n')
+        : freshInput ? latestInput : saved?.prompt || row?.prompt || latestInput;
+      const requestId = pending.length ? pending[pending.length - 1].id : freshInput ? crypto.randomUUID() : saved?.requestId || crypto.randomUUID();
       if (!prompt) throw new Error('The native agent task could not be read.');
       const sessionId = await $.session.id();
       if (!run.pluginData) {
@@ -181,7 +208,13 @@ export function register(on) {
       }
       // Persist restoration inputs before the task starts, including an early
       // agents-view switch that happens before its first ready event arrives.
-      await $.store.set(`native-run:${e.agentId}`, { id: run.id, pluginData: run.pluginData, prompt });
+      const current = /** @type {typeof saved} */ (await $.store.get(`native-run:${e.agentId}`));
+      const claimed = new Set(pending.map((item) => item.id));
+      await $.store.set(`native-run:${e.agentId}`, { id: run.id, pluginData: run.pluginData, prompt, requestId,
+        inputSignature,
+        feedback: (current?.feedback || []).filter((item) => !claimed.has(item.id)) });
+      const owned = /** @type {string[] | undefined} */ (await $.store.get(`native-workers:${sessionId}`));
+      await $.store.set(`native-workers:${sessionId}`, [...new Set([...(owned || []), run.id])]);
       // Real progress chunks reset Claude's watchdog; UI redraws do not.
       yield { kind: 'thinking', index: 0, text: 'Starting Codex.\n' };
       // Auto-open is optional inspection and must not hold a background task.
@@ -193,7 +226,7 @@ export function register(on) {
         argv: ['node', `${$.plugin.root}/scripts/bridge.mjs`, 'run', run.id],
         cwd: row?.cwd || await $.session.cwd(),
         env: { CODEX_COMPANION_SESSION_ID: sessionId, ...(run.pluginData ? { CLAUDE_PLUGIN_DATA: run.pluginData } : {}) },
-        input: JSON.stringify({ prompt })
+        input: JSON.stringify({ prompt, requestId })
       });
       while (true) {
         const chunk = await stream.next();
@@ -239,7 +272,7 @@ export function register(on) {
       });
       if (next.signal.aborted) throw new Error('Native worker checkpointed by Claude.');
     } catch (error) {
-      run.status = next.signal.aborted ? 'interrupted' : 'failed';
+      setRunStatus(run, next.signal.aborted ? 'interrupted' : 'failed');
       run.error = error instanceof Error ? error.message : String(error);
       // A checkpoint must leave an unfinished transcript. An end_turn answer
       // here makes Claude's adoption path consider the child already completed.
@@ -257,7 +290,7 @@ export function register(on) {
     // A Mods budget/error must never silently send a native Codex task to Claude.
     const run = e.agentId ? runs.get(e.agentId) : null;
     if (!run) return yield* next(e);
-    run.status = next.signal.aborted ? 'interrupted' : 'failed';
+    setRunStatus(run, next.signal.aborted ? 'interrupted' : 'failed');
     run.error = next.error.message;
     if (next.signal.aborted) throw next.error;
     const answer = workerAnswer(run);
@@ -268,54 +301,81 @@ export function register(on) {
 
   on('turn.complete', async ($, e, next) => {
     const run = e.agentId ? runs.get(e.agentId) : null;
-    if (run && e.isAborted) { run.status = 'interrupted'; $.ui.invalidate('ui.render'); }
+    if (run && e.isAborted) { setRunStatus(run, 'interrupted'); $.ui.invalidate('ui.render'); }
     return next(e);
   });
 
   on('command.run', { command: 'codex-native' }, async ($, e) => {
     if (!e.args.trim()) return { text: 'Usage: /codex-native <task>' };
     const spawned = await $.agent.spawn({ subagentType: AGENT_TYPE, prompt: e.args, description: e.args.slice(0, 60) });
-    return { text: spawned.deny || `Started Codex agent ${spawned.agentId}. Use /codex-native-status for activity.` };
+    return { text: spawned.deny || 'Started Codex. Use /codex-native-status for activity.' };
   });
   on('command.run', { command: 'codex-native-status' }, async ($) => {
     await $.ui.open({ id: PANE_ID, title: 'Codex activity', focus: true });
-    return { text: [...runs.values()].map((run) => `${run.agentId}: ${run.description} · ${run.status}`).join('\n') || 'No native Codex agents yet.' };
+    return { text: 'Opened Codex activity.' };
   });
   on('command.run', { command: 'codex-native-stop' }, async ($, e) => {
     const run = runs.get(e.args.trim());
-    if (!run) return { text: 'Supply an agent id from /codex-native-status.' };
+    if (!run) return { text: 'Use Stop Codex in the activity pane, or supply an agent ID from expanded activity.' };
     await stopRun($, run);
-    return { text: `Codex agent ${run.agentId}: ${run.status}` };
+    return { text: `${displayLine(run.description, 80)} · ${displayLine(run.status, 16)}` };
   });
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE_ID) return next(e);
     const workers = [...runs.values()];
-    if (paneViewAgentId !== e.props.view.agentId) {
-      paneViewAgentId = e.props.view.agentId;
-      if (runs.has(paneViewAgentId)) {
-        selectedAgentId = paneViewAgentId;
-        workerPage = Math.floor(workers.findIndex((run) => run.agentId === selectedAgentId) / WORKERS_PER_PAGE);
-        expandedActivity = false;
-      }
-    }
-    const selected = runs.get(selectedAgentId) || workers[0];
-    const pages = Math.max(1, Math.ceil(workers.length / WORKERS_PER_PAGE));
-    workerPage = Math.min(workerPage, pages - 1);
+    const viewId = e.props.view.agentId ?? null;
+    if (!paneStates.has(viewId)) paneStates.set(viewId, new PaneState(viewId));
+    const state = paneStates.get(viewId);
+    const bodyRows = e.props.scroll.bodyRows;
+    state.pageSize = Math.max(1, Math.min(PAGE_SIZE, Math.floor((bodyRows - 6) / 3)));
+    const view = state.view(workers);
+    // Keep headers, task subtitles, controls and folded history visible in a
+    // short inline pane. Explicit expansion can use the host's scrolling.
+    const reservedRows = 2 + view.activeRows.length * 3
+      + (view.previous.length ? 2 : 0)
+      + (state.historyOpen ? view.previousRows.length * 2 : 0)
+      + (view.activePages > 1 ? 2 : 0)
+      + (state.historyOpen && view.previousPages > 1 ? 2 : 0)
+      + (e.props.bodyColumns < 38 ? 1 : 0);
+    const compactLimit = Math.max(0, Math.min(6, bodyRows - reservedRows));
     const { Box, Text, Button } = $.ui.resolve(e);
+    const renderRows = (group, history = false) => group.map((run, i) => {
+      const selected = view.selected === run;
+      return h(Box, { key: `worker-${run.agentId}`, flexDirection: 'column' },
+        h(Button, { key: `select-${run.agentId}`, plain: true, dimColor: history && !selected,
+          label: history ? `${selected ? '› ' : '  '}${displayLine(run.description, Math.max(16, e.props.bodyColumns - 24))} · ${displayLine(run.status, 16)}`
+            : agentHeader(run, e.props.bodyColumns, selected),
+          ...(!history ? { hotkey: String(i + 1) } : {}),
+          onPress: () => { state.select(run); $.ui.invalidate('ui.render'); }
+        }),
+        h(Box, { flexDirection: 'column', paddingLeft: 3 },
+          ...(!history ? [h(Text, { key: `task-${run.agentId}`, bold: selected, dimColor: !selected, wrap: 'truncate-end' },
+            displayLine(run.description))] : []),
+          ...(selected ? [renderActivity($, e, run, state, compactLimit)] : [])
+        )
+      );
+    });
+    const renderPages = (history, pages, page) => pages > 1 ? [h(Box, { flexDirection: 'row', flexWrap: 'wrap', gap: 1 },
+      ...(page > 0 ? [h(Button, { key: history ? 'previous-history' : 'previous-workers', label: 'Previous page', onPress: () => {
+        state.page(history ? 'previous' : 'active', -1, workers); $.ui.invalidate('ui.render');
+      } })] : []),
+      h(Text, { dimColor: true }, `Page ${page + 1} of ${pages}`),
+      ...(page < pages - 1 ? [h(Button, { key: history ? 'next-history' : 'next-workers', label: 'Next page', onPress: () => {
+        state.page(history ? 'previous' : 'active', 1, workers); $.ui.invalidate('ui.render');
+      } })] : [])
+    )] : [];
     return /** @type {import('claude-code').RenderElement} */ (h(Box, { flexDirection: 'column', gap: 1 },
-      h(Text, { bold: true }, `${workers.length} Codex worker${workers.length === 1 ? '' : 's'}`),
-      ...workers.slice(workerPage * WORKERS_PER_PAGE, (workerPage + 1) * WORKERS_PER_PAGE).map((run, i) => h(Button, { key: `select-${run.agentId}`, plain: true,
-        label: `${selected === run ? '› ' : '  '}${displayText(run.description, 42).replace(/\s+/g, ' ')} · ${displayText(run.status, 32)}`,
-        hotkey: String(i + 1),
-        onPress: () => { selectedAgentId = run.agentId; expandedActivity = false; $.ui.invalidate('ui.render'); }
-      })),
-      ...(pages > 1 ? [h(Box, { flexDirection: 'row', gap: 1 },
-        h(Button, { key: 'previous-workers', label: 'Previous workers', onPress: () => { workerPage = (workerPage + pages - 1) % pages; $.ui.invalidate('ui.render'); } }),
-        h(Text, {}, `${workerPage + 1}/${pages}`),
-        h(Button, { key: 'next-workers', label: 'Next workers', onPress: () => { workerPage = (workerPage + 1) % pages; $.ui.invalidate('ui.render'); } })
-      )] : []),
-      ...(selected ? [renderActivity($, e, [selected])] : [h(Text, { dimColor: true }, 'No Codex workers yet.')])
+      h(Text, { bold: true }, `${view.active.length} active agent${view.active.length === 1 ? '' : 's'}`),
+      ...renderRows(view.activeRows),
+      ...renderPages(false, view.activePages, state.activePage),
+      ...(view.previous.length ? [h(Button, { key: 'toggle-previous', plain: true, dimColor: !state.historyOpen,
+        label: `${state.historyOpen ? '▾' : '▸'} Previous agents (${view.previous.length})${!state.historyOpen && view.failedCount ? ` · ${view.failedCount} failed` : ''}`, hotkey: 'p',
+        onPress: () => { state.toggleHistory(); $.ui.invalidate('ui.render'); }
+      }),
+        ...(state.historyOpen ? [...renderRows(view.previousRows, true), ...renderPages(true, view.previousPages, state.previousPage)] : [])
+      ] : []),
+      ...(!workers.length ? [h(Text, { dimColor: true }, 'No Codex workers yet.')] : [])
     ));
   });
   return undefined;

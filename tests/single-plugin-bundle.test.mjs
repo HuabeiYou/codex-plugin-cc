@@ -34,8 +34,22 @@ test('single plugin build is deterministic and contains both hook systems and on
     assert.match(register, /codex:worker/);
     assert.equal(fs.existsSync(path.join(pluginRoot, 'agents/codex-rescue.md')), false);
     assert.match(fs.readFileSync(path.join(pluginRoot, 'commands/rescue.md'), 'utf8'), /codex:worker/);
+    for (const command of ['review', 'adversarial-review']) {
+      const text = fs.readFileSync(path.join(pluginRoot, `commands/${command}.md`), 'utf8');
+      assert.match(text, /codex:worker/);
+      assert.match(text, /SendMessage/);
+      assert.match(text, /write: false/);
+      assert.doesNotMatch(text, /codex-native-prototype:/);
+    }
     assert.match(fs.readFileSync(path.join(pluginRoot, 'agents/worker.md'), 'utf8'), /codex:codex-native-supervision/);
     assert.doesNotMatch(register, /codex-native-prototype:/);
+    assert.ok(fs.existsSync(path.join(pluginRoot, 'hooks/native/panel.mjs')));
+    const sourceTypes = path.resolve('plugins/codex-native-prototype/.claude-plugin/types/claude-code/index.d.ts');
+    if (fs.existsSync(sourceTypes)) {
+      assert.equal(fs.readFileSync(path.join(pluginRoot, '.claude-plugin/types/claude-code/index.d.ts'), 'utf8'),
+        fs.readFileSync(sourceTypes, 'utf8'), 'The generated bundle must support its documented Mod typecheck');
+    }
+    assert.match(register, /from '\.\/panel\.mjs'/);
     assert.ok(fs.existsSync(path.join(pluginRoot, 'skills/codex-job-supervision/SKILL.md')));
     assert.ok(fs.existsSync(path.join(pluginRoot, 'skills/codex-native-supervision/SKILL.md')));
     buildSinglePlugin(destination);

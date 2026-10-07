@@ -26,7 +26,7 @@ function defaultState() {
   };
 }
 
-export function resolveStateDir(cwd) {
+export function resolveStateDir(cwd, env = process.env) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   let canonicalWorkspaceRoot = workspaceRoot;
   try {
@@ -38,7 +38,7 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
+  const pluginDataDir = env[PLUGIN_DATA_ENV];
   const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
   return path.join(stateRoot, `${slug}-${hash}`);
 }
@@ -47,8 +47,8 @@ export function resolveStateFile(cwd) {
   return path.join(resolveStateDir(cwd), STATE_FILE_NAME);
 }
 
-export function resolveJobsDir(cwd) {
-  return path.join(resolveStateDir(cwd), JOBS_DIR_NAME);
+export function resolveJobsDir(cwd, env = process.env) {
+  return path.join(resolveStateDir(cwd, env), JOBS_DIR_NAME);
 }
 
 export function ensureStateDir(cwd) {

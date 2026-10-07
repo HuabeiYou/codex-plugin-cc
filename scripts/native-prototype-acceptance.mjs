@@ -17,6 +17,7 @@ if (process.argv.slice(2).some((arg) => !['--real', '--bundle'].includes(arg))) 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-acceptance-'));
 const pluginRoot = path.join(directory, 'plugin');
 fs.cpSync(pluginSource, pluginRoot, { recursive: true });
+if (pluginName === 'codex-native-prototype') fs.cpSync(path.join(root, 'plugins/codex'), path.join(directory, 'codex'), { recursive: true });
 const config = path.join(directory, 'claude-config'); fs.mkdirSync(config);
 const userConfig = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8'));
 const testApiKey = 'sk-ant-native-lifecycle-fixture';
@@ -28,7 +29,7 @@ let passed = false;
 
 function execute(env) {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', ['-p', 'Run native acceptance', '--max-turns', '2',
+    const child = spawn('claude', ['-p', 'Run native acceptance', '--max-turns', env.CODEX_NATIVE_ACCEPTANCE_REUSE === '1' ? '8' : '2',
       '--setting-sources', '', '--settings', JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' } }),
       '--plugin-dir', pluginRoot,
       '--plugin-dir', path.join(root, 'tests/fixtures/native-agent-driver'), '--output-format', 'json'],
@@ -40,7 +41,10 @@ function execute(env) {
     child.on('error', (error) => { clearTimeout(timeout); reject(error); });
     child.on('close', (code) => {
       clearTimeout(timeout);
-      if (code !== 0) { reject(new Error(`Claude exited ${code}: ${stderr}`)); return; }
+      if (code !== 0) {
+        fs.writeFileSync(path.join(directory, 'claude-failure.json'), stdout, { mode: 0o600 });
+        reject(new Error(`Claude exited ${code}: ${stderr || stdout.slice(-1500)}`)); return;
+      }
       try { resolve(JSON.parse(stdout)); } catch { reject(new Error('Claude did not return JSON.')); }
     });
   });
@@ -51,32 +55,50 @@ function alive(pid) {
 }
 
 try {
-  for (const scenario of [{ cancel: false, background: false }, { cancel: false, background: true }, { cancel: true, background: true }, ...(!real ? [{ cancel: false, background: true, watchdog: true }] : [])]) {
-    const { cancel, background, watchdog } = scenario;
-    const bin = path.join(directory, watchdog ? 'watchdog' : cancel ? 'cancel' : background ? 'background' : 'complete');
+  for (const scenario of [{ cancel: false, background: false }, { cancel: false, background: true }, { cancel: true, background: true }, ...(!real ? [{ cancel: false, background: true, watchdog: true }, { cancel: false, background: false, reuse: true }] : [])]) {
+    const { cancel, background, watchdog, reuse } = scenario;
+    const bin = path.join(directory, reuse ? 'reuse' : watchdog ? 'watchdog' : cancel ? 'cancel' : background ? 'background' : 'complete');
     fs.mkdirSync(bin);
-    if (!real) installFakeCodex(bin, watchdog ? 'native-activity-only-task' : cancel ? 'interruptible-slow-task' : 'native-edit-task');
+    if (!real) installFakeCodex(bin, reuse ? 'native-stream-task' : watchdog ? 'native-activity-only-task' : cancel ? 'interruptible-slow-task' : 'native-edit-task');
     const env = { ...(real ? process.env : buildEnv(bin)),
       CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: testApiKey, ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', ENABLE_CLAUDEAI_MCP_SERVERS: 'false',
       CODEX_NATIVE_ACCEPTANCE_CANCEL: cancel ? '1' : '0',
       CODEX_NATIVE_ACCEPTANCE_BACKGROUND: background ? '1' : '0',
+      CODEX_NATIVE_ACCEPTANCE_REUSE: reuse ? '1' : '0',
       CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE: `${pluginName}:worker`,
       CLAUDE_PLUGIN_DATA: path.join(directory, 'plugin-data'),
       ...(watchdog ? { CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS: '2000' } : {}),
       CODEX_NATIVE_ACCEPTANCE_TASK: JSON.stringify({ write: real ? false : true, task: cancel
         ? 'Perform a thorough read-only review of this repository. Inspect implementation and tests; report architecture and integration issues in detail. Do not edit files.'
         : real ? 'Read README.md and describe this repository in one sentence. Do not edit anything.' : 'Implement a test change in the isolated acceptance workspace.' }) };
-    if (!real) { env.CODEX_NATIVE_ACCEPTANCE_CWD = path.join(directory, watchdog ? 'watchdog-workspace' : cancel ? 'cancel-workspace' : background ? 'background-workspace' : 'edit-workspace'); fs.mkdirSync(env.CODEX_NATIVE_ACCEPTANCE_CWD); }
+    if (!real) { env.CODEX_NATIVE_ACCEPTANCE_CWD = path.join(directory, reuse ? 'reuse-workspace' : watchdog ? 'watchdog-workspace' : cancel ? 'cancel-workspace' : background ? 'background-workspace' : 'edit-workspace'); fs.mkdirSync(env.CODEX_NATIVE_ACCEPTANCE_CWD); }
     const startedAt = Date.now();
     const response = await execute(env);
     const wallMs = Date.now() - startedAt;
     assert.equal(response.is_error, false);
     assert.equal(Object.keys(response.modelUsage ?? {}).length, 0, 'Parent/child must not invoke Claude models');
     const detail = JSON.parse(response.result);
-    fs.writeFileSync(path.join(directory, `${cancel ? 'cancel' : watchdog ? 'watchdog' : background ? 'background' : 'complete'}-detail.json`), JSON.stringify(detail));
+    fs.writeFileSync(path.join(directory, `${reuse ? 'reuse' : cancel ? 'cancel' : watchdog ? 'watchdog' : background ? 'background' : 'complete'}-detail.json`), JSON.stringify(detail));
     const ready = detail.bridgeEvents.find((event) => event.kind === 'ready');
     assert.ok(ready?.threadId && ready.appServerPid, 'Codex app-server must actually start');
     const lifecycle = response.subagent_stats;
+    if (reuse) {
+      assert.equal(lifecycle.spawned, 3, 'Feedback must reuse the worker instead of spawning');
+      assert.equal(detail.completions.length, 5);
+      assert.equal(detail.completions[3].agentId, detail.completions[0].agentId);
+      assert.equal(detail.completions[4].agentId, detail.completions[1].agentId);
+      const state = JSON.parse(fs.readFileSync(path.join(bin, 'fake-codex-state.json')));
+      assert.equal(state.threads.length, 3);
+      assert.equal(state.turnStarts.length, 5);
+      assert.equal(state.turnStarts[3].threadId, state.turnStarts[0].threadId);
+      assert.equal(state.turnStarts[4].threadId, state.turnStarts[1].threadId);
+      assert.equal(state.turnStarts[3].prompt, 'Fix the review findings on your original implementation.');
+      assert.equal(state.turnStarts[4].prompt, 'I addressed your findings. Re-review the revised implementation.');
+      assert.equal(state.lastThreadResume.sandbox, 'read-only');
+      assert.equal(new Set(state.archivedThreads).size, 3, 'Session end must archive all idle plugin-owned topics');
+      reports.push({ scenario: 'topic-reuse', wallMs, workers: 3, turns: 5, archived: 3 });
+      continue;
+    }
     assert.equal(lifecycle.spawned, 1);
     assert.deepEqual(detail.openedPanes, ['codex-native-activity'], 'Worker launch opens the activity pane once');
     assert.ok(detail.activityNotices.length > 0, 'Worker must publish live activity');

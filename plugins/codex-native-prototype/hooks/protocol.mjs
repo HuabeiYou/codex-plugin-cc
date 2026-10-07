@@ -12,12 +12,24 @@ export function displayText(value, limit = 2400) {
 }
 
 export function createRun(agentId, description, id) {
-  return { id, agentId, description, status: "starting", threadId: null, turnId: null, model: null,
-    activity: [], answer: "", result: null, error: null, toolUseId: null };
+  return { id, agentId, description, status: "starting", threadId: null, turnId: null, model: null, effort: null,
+    activity: [], answer: "", result: null, error: null, toolUseId: null, finishedOrder: null };
+}
+
+let finishedSequence = 0;
+export function isActiveRun(run) {
+  return ['starting', 'running', 'stopping'].includes(run.status);
+}
+
+export function setRunStatus(run, status) {
+  const prior = run.status;
+  run.status = status;
+  if (isActiveRun(run)) run.finishedOrder = null;
+  else if (prior !== status || run.finishedOrder === null) run.finishedOrder = ++finishedSequence;
 }
 
 export function acceptEvent(run, event) {
-  if (event.kind === "ready") { run.threadId = event.threadId; run.model = event.model ?? null; run.status = "running"; }
+  if (event.kind === "ready") { run.threadId = event.threadId; run.model = event.model ?? null; run.effort = event.effort ?? null; setRunStatus(run, 'running'); }
   if (event.turnId) run.turnId = event.turnId;
   if (event.kind === "activity") {
     run.activity.push(event);
@@ -27,12 +39,12 @@ export function acceptEvent(run, event) {
   } else if (event.kind === "result") {
     if (event.threadId) run.threadId = event.threadId;
     run.result = event;
-    run.status = event.status;
+    setRunStatus(run, event.status);
     run.answer = event.answer;
     run.error = event.error ?? null;
   } else if (event.kind === "error") {
     run.error = event.message;
-    run.status = "failed";
+    setRunStatus(run, 'failed');
   }
 }
 

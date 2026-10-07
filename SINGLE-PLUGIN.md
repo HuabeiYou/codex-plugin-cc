@@ -9,6 +9,8 @@ npm run bundle:validate
 npm run bundle:test
 ```
 
+The bundle retains the generated Mod API declarations from the native plugin for TypeScript validation. On a fresh checkout, load the native plugin once with `npm run prototype` to generate those declarations before running the bundle checks.
+
 For a first installation, run these commands in your terminal:
 
 ```bash
@@ -26,9 +28,11 @@ Start Claude normally in the project you want to work on:
 claude
 ```
 
-No `--plugin-dir` flags are needed. Ask Claude to use `codex:worker` for implementation, debugging, or continuation. `/codex:rescue` delegates to that same worker; the old forwarding agent is absent. The activity pane opens automatically, and `/codex-native-status` reopens it. Opening the worker from Claude's agent list shows its own activity notices. The main transcript keeps the ordinary Agent row and completion feedback. Other companion commands, including review, remain available.
+No `--plugin-dir` flags are needed. Ask Claude to use `codex:worker` for implementation, debugging, or review. Claude keeps a conversation per topic: implementation adjustments and re-reviews return to their original workers with `SendMessage`; new topics and independent reviews get fresh workers. `/codex:rescue`, `/codex:review`, and `/codex:adversarial-review` use that lifecycle, with read-only review conversations. The activity pane opens automatically, and `/codex-native-status` reopens it. Opening the worker from Claude's agent list shows its own activity notices. The main transcript keeps the ordinary Agent row and completion feedback.
 
 The worker uses rescue's workspace-write sandbox by default and can edit project files. Claude selects explicit read-only scope when the task requires it. Workers stay attached until completion, with no fixed task-duration cap. Claude reads their native completion feedback automatically. Opening Claude's agents view preserves the worker identity and resumes its exact interrupted Codex thread after Claude's session handoff. Arbitrary exit/restart recovery is still outside this guarantee.
+
+Completed plugin-owned conversations are archived recoverably when the session ends with its workers idle. Their history and reports remain saved; later feedback unarchives and continues the exact conversation. Cleanup excludes active or interrupted workers and other sessions' conversations. Exit-time cleanup is best effort.
 
 Keep the generated local marketplace at its current path for this trial. To update from later source changes, first finish or stop delegated work and close Claude Code. Then rebuild, refresh the marketplace, and update:
 

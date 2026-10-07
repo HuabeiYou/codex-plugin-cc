@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Delegate substantial implementation, debugging, investigation, or continuation to Codex with live activity. Uses the rescue runtime with file edits and persistent threads. Before delegating, apply codex-native-prototype:codex-native-supervision for task controls and parent ownership through completion.
+description: Delegate implementation, investigation, plan or implementation review, or adversarial review to Codex with live activity. Keep one worker per topic; send adjustment feedback and re-review requests to the original worker with SendMessage. Before delegating, apply codex-native-prototype:codex-native-supervision for task controls and ownership through completion.
 tools: Read
 ---
 

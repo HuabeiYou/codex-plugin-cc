@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { makeTempDir } from "./helpers.mjs";
-import { runCodex, cancelRun, taskRequest, bindOutput } from "../plugins/codex-native-prototype/scripts/bridge.mjs";
+import { runCodex, cancelRun, taskRequest, bindOutput, archiveNativeRuns } from "../plugins/codex-native-prototype/scripts/bridge.mjs";
 import { createRun, acceptEvent, readEvents, displayText } from "../plugins/codex-native-prototype/hooks/protocol.mjs";
 import { pluginEnvironment, publishPluginContext } from "../plugins/codex/scripts/lib/plugin-context.mjs";
 import { markReady, waitReady, readinessPath } from '../plugins/codex-native-prototype/scripts/native-ready-server.mjs';
@@ -105,6 +105,14 @@ test("native bridge streams a real app-server protocol turn without repeating it
   assert.equal(result.answer, "Read-only answer.");
   assert.equal(events.filter((e) => e.kind === "text").map((e) => e.text).join(""), result.answer);
   assert.ok(events.some((e) => e.type === "commandOutput"));
+  const ready = events.find((e) => e.kind === "ready");
+  assert.equal(ready.model, "gpt-5.4");
+  assert.equal(ready.effort, "medium");
+  const command = events.filter((event) => event.type === 'commandExecution');
+  assert.equal(command.length, 2);
+  assert.equal(command[0].itemId, 'read_once');
+  assert.equal(command[1].itemId, command[0].itemId);
+  assert.equal(events.find((event) => event.type === 'commandOutput').itemId, 'read_once');
   const state = JSON.parse(fs.readFileSync(path.join(options.bin, "fake-codex-state.json")));
   assert.equal(state.appServerStarts, 1);
   assert.equal(state.nativeCommandStarts, 1);
@@ -186,6 +194,9 @@ test("JSONL activity survives arbitrary stdout chunk boundaries and remains boun
     for (const event of parsed.events) acceptEvent(run, event);
   }
   assert.equal(run.answer, "Hello 世界");
+  acceptEvent(run, { kind: "ready", model: "gpt-6.1-sol", effort: "high", threadId: "thread" });
+  assert.equal(run.model, "gpt-6.1-sol");
+  assert.equal(run.effort, "high");
   for (let i = 0; i < 200; i++) acceptEvent(run, { kind: "activity", label: String(i) });
   assert.equal(run.activity.length, 100);
   assert.equal(run.activity[0].label, "100");
@@ -205,13 +216,75 @@ test("native implementation changes a workspace file and emits its file-change a
 test("worker continuation uses rescue's saved thread and explicit model and effort controls", async () => {
   const options = fixture("native-stream-task");
   const first = await runCodex(options, () => {});
-  const second = await runCodex({ ...options, runId: randomUUID(), prompt: JSON.stringify({ task: "Continue the fix.", resumeLast: true, model: "spark", effort: "high" }) }, () => {});
+  const events = [];
+  const second = await runCodex({ ...options, runId: randomUUID(), prompt: JSON.stringify({ task: "Continue the fix.", resumeLast: true, model: "spark", effort: "high" }) }, (event) => events.push(event));
+  assert.equal(events.find((event) => event.kind === "ready").effort, "high");
   const state = JSON.parse(fs.readFileSync(path.join(options.bin, "fake-codex-state.json")));
   assert.equal(second.threadId, first.threadId);
   assert.equal(state.lastThreadResume.threadId, first.threadId);
   assert.equal(state.lastTurnStart.model, "gpt-5.3-codex-spark");
   assert.equal(state.lastTurnStart.effort, "high");
   assert.notEqual(second.jobId, first.jobId);
+});
+
+test('topic feedback and adversarial re-review resume their original conversations after interleaved work', async () => {
+  const options = fixture('native-stream-task');
+  const implementation = await runCodex({ ...options, requestId: 'implement' }, () => {});
+  const reviewerId = randomUUID();
+  const reviewer = await runCodex({ ...options, runId: reviewerId, requestId: 'review',
+    prompt: JSON.stringify({ task: 'Adversarial review of this implementation.', write: false, model: 'spark', effort: 'high' }) }, () => {});
+  const unrelated = await runCodex({ ...options, runId: randomUUID(), requestId: 'another-topic' }, () => {});
+  const adjustment = await runCodex({ ...options, requestId: 'adjust', prompt: 'Fix the reviewer findings and test the changes.' }, () => {});
+  assert.equal(adjustment.threadId, implementation.threadId);
+  assert.notEqual(adjustment.turnId, implementation.turnId);
+  const reReview = await runCodex({ ...options, runId: reviewerId, requestId: 're-review',
+    prompt: 'I addressed your findings. Re-review the revised implementation.' }, () => {});
+  assert.equal(reReview.threadId, reviewer.threadId);
+  assert.notEqual(reReview.threadId, unrelated.threadId);
+  const stateFile = path.join(options.bin, 'fake-codex-state.json');
+  const state = JSON.parse(fs.readFileSync(stateFile));
+  assert.equal(state.lastThreadResume.sandbox, 'read-only');
+  assert.equal(state.lastTurnStart.model, 'gpt-5.3-codex-spark');
+  assert.equal(state.lastTurnStart.effort, 'high');
+  assert.equal(state.lastTurnStart.prompt, 'I addressed your findings. Re-review the revised implementation.');
+  assert.equal(state.threads.length, 3);
+  assert.equal(state.turnStarts.length, 5);
+  assert.deepEqual(await runCodex({ ...options, runId: reviewerId, requestId: 're-review', prompt: 'Ignored replay input' }, () => {}), reReview);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile)).turnStarts.length, 5, 'Replay must not execute the feedback twice');
+});
+
+test('session cleanup archives only completed owned conversations and feedback restores their exact history', async () => {
+  const options = fixture('native-stream-task');
+  const first = await runCodex({ ...options, requestId: 'first' }, () => {});
+  const otherId = randomUUID();
+  const other = await runCodex({ ...options, runId: otherId,
+    env: { ...options.env, CODEX_COMPANION_SESSION_ID: 'other-session' } }, () => {});
+  installFakeCodex(options.bin, 'interruptible-slow-task');
+  const interruptedId = randomUUID();
+  let started;
+  const ready = new Promise((resolve) => { started = resolve; });
+  const pending = runCodex({ ...options, runId: interruptedId }, (event) => { if (event.type === 'turn') started(); });
+  await ready;
+  try {
+    const activeCleanup = await archiveNativeRuns({ runIds: [options.runId, interruptedId], sessionId: 'native-test-session' }, options.env);
+    assert.deepEqual(activeCleanup.archived, [], 'Keep completed conversations available while this session still has an active worker');
+  } finally { cancelRun(interruptedId); await pending; }
+  installFakeCodex(options.bin, 'native-stream-task');
+  const cleanup = await archiveNativeRuns({ runIds: [options.runId, otherId, interruptedId], sessionId: 'native-test-session' }, options.env);
+  assert.deepEqual(cleanup.archived, [options.runId]);
+  assert.deepEqual(cleanup.errors, []);
+  assert.deepEqual(cleanup.skipped, [otherId, interruptedId]);
+  const checkpointFile = first.reportFile + '.checkpoint.json';
+  assert.equal(JSON.parse(fs.readFileSync(checkpointFile)).archived, true);
+  const feedback = await runCodex({ ...options, requestId: 'feedback', prompt: 'Continue the original topic after archival.' }, () => {});
+  assert.equal(feedback.threadId, first.threadId);
+  assert.notEqual(feedback.turnId, first.turnId);
+  const state = JSON.parse(fs.readFileSync(path.join(options.bin, 'fake-codex-state.json')));
+  assert.deepEqual(state.archivedThreads, [first.threadId]);
+  assert.deepEqual(state.unarchivedThreads, [first.threadId]);
+  assert.equal(state.threads.find((thread) => thread.id === other.threadId).archived, undefined);
+  assert.equal(JSON.parse(fs.readFileSync(checkpointFile)).archived, false);
+  assert.ok(fs.existsSync(first.reportFile));
 });
 
 test("native task controls reject invalid envelopes and preserve option-like task text", () => {

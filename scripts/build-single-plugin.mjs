@@ -40,7 +40,9 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   }
   fs.rmSync(path.join(pluginRoot, 'agents', 'codex-rescue.md'));
   fs.writeFileSync(path.join(pluginRoot, 'agents', 'worker.md'), fs.readFileSync(path.join(native, 'agents', 'worker.md'), 'utf8').replaceAll('codex-native-prototype:', 'codex:'));
-  fs.writeFileSync(path.join(pluginRoot, 'commands', 'rescue.md'), fs.readFileSync(path.join(native, 'commands', 'rescue.md'), 'utf8').replaceAll('codex-native-prototype:', 'codex:'));
+  for (const command of ['rescue', 'review', 'adversarial-review']) {
+    fs.writeFileSync(path.join(pluginRoot, 'commands', `${command}.md`), fs.readFileSync(path.join(native, 'commands', `${command}.md`), 'utf8').replaceAll('codex-native-prototype:', 'codex:'));
+  }
   const baseManifest = json(path.join(official, '.claude-plugin', 'plugin.json'));
   const nativeManifest = json(path.join(native, '.claude-plugin', 'plugin.json'));
   const hash = createHash('sha256');
@@ -62,6 +64,7 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
     .replaceAll('/scripts/bridge.mjs', '/scripts/native-bridge.mjs');
   fs.writeFileSync(path.join(pluginRoot, 'hooks', 'native', 'register.js'), register);
   fs.copyFileSync(path.join(native, 'hooks', 'protocol.mjs'), path.join(pluginRoot, 'hooks', 'native', 'protocol.mjs'));
+  fs.copyFileSync(path.join(native, 'hooks', 'panel.mjs'), path.join(pluginRoot, 'hooks', 'native', 'panel.mjs'));
   const bridge = fs.readFileSync(path.join(native, 'scripts', 'bridge.mjs'), 'utf8')
     .replaceAll('"../../codex/scripts/', '"./');
   fs.writeFileSync(path.join(pluginRoot, 'scripts', 'native-bridge.mjs'), bridge);
@@ -69,12 +72,16 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   fs.copyFileSync(path.join(native, 'scripts', 'native-ready-server.mjs'), path.join(pluginRoot, 'scripts', 'native-ready-server.mjs'));
   fs.cpSync(path.join(native, 'skills'), path.join(pluginRoot, 'skills'), { recursive: true });
   fs.copyFileSync(path.join(native, 'tsconfig.json'), path.join(pluginRoot, 'tsconfig.json'));
+  // Claude's test runner loads an isolated copy and does not populate the
+  // source package's declarations. Retain the local SDK for bundle typechecks.
+  const modTypes = path.join(native, '.claude-plugin', 'types');
+  if (fs.existsSync(modTypes)) fs.cpSync(modTypes, path.join(pluginRoot, '.claude-plugin', 'types'), { recursive: true });
   fs.mkdirSync(path.join(pluginRoot, 'tests'), { recursive: true });
   fs.writeFileSync(path.join(pluginRoot, 'tests', 'native-mod.test.ts'), namespace(fs.readFileSync(path.join(native, 'tests', 'native-mod.test.ts'), 'utf8')));
   fs.writeFileSync(path.join(pluginRoot, 'README.md'), [
     '# Codex for Claude Code', '',
     'One plugin combines the patched companion runtime and the experimental native Mod. Claude supervises agents and reads their feedback automatically.', '',
-    'Use `codex:worker` for implementation, debugging, and continuation with live activity. It uses the rescue runtime and supports file edits. The `/codex-native`, `/codex-native-status`, and `/codex-native-stop` commands remain available. `/codex:rescue` delegates to the same worker. Review commands remain available. Tasks have no fixed duration cap; saved Codex threads support continuation.', ''
+    'Use `codex:worker` for implementation, investigation, or review with live activity. Keep one conversation per topic: send adjustments and re-reviews to its original worker with SendMessage; start new workers for new topics and independent reviews. `/codex:rescue`, `/codex:review`, and `/codex:adversarial-review` use this lifecycle; reviews remain read-only. Completed conversations are archived when the session ends with its workers idle and can be resumed later. The `/codex-native`, `/codex-native-status`, and `/codex-native-stop` commands remain available. Tasks have no fixed duration cap.', ''
   ].join('\n'));
   writeJson(path.join(destination, '.claude-plugin', 'marketplace.json'), {
     name: 'huabei-codex', owner: { name: 'HuabeiYou' },

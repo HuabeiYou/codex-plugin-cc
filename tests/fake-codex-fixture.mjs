@@ -315,7 +315,7 @@ rl.on("line", (line) => {
           throw new Error("thread/start.persistFullHistory requires experimentalApi capability");
         }
         const thread = nextThread(state, message.params.cwd, message.params.ephemeral);
-        send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
+        send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: BEHAVIOR === "native-stream-task" ? "medium" : null } });
         send({ method: "thread/started", params: { thread: { id: thread.id } } });
         break;
       }
@@ -348,9 +348,27 @@ rl.on("line", (line) => {
           throw new Error("thread/resume.persistFullHistory requires experimentalApi capability");
         }
         const thread = ensureThread(state, message.params.threadId);
+        if (thread.archived) throw new Error('Thread must be unarchived before resuming.');
         thread.updatedAt = now();
         saveState(state);
-        send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
+        send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: BEHAVIOR === "native-stream-task" ? "medium" : null } });
+        break;
+      }
+
+      case 'thread/archive': {
+        const thread = ensureThread(state, message.params.threadId);
+        thread.archived = true;
+        state.archivedThreads = [...(state.archivedThreads || []), thread.id];
+        saveState(state);
+        send({ id: message.id, result: {} });
+        break;
+      }
+      case 'thread/unarchive': {
+        const thread = ensureThread(state, message.params.threadId);
+        thread.archived = false;
+        state.unarchivedThreads = [...(state.unarchivedThreads || []), thread.id];
+        saveState(state);
+        send({ id: message.id, result: { thread: buildThread(thread) } });
         break;
       }
 
@@ -454,6 +472,7 @@ rl.on("line", (line) => {
 	          effort: message.params.effort ?? null,
 	          prompt
 	        };
+        state.turnStarts = [...(state.turnStarts || []), state.lastTurnStart];
         saveState(state);
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 

@@ -1,7 +1,8 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { getSessionRuntimeStatus } from "./codex.mjs";
-import { getConfig, listJobs, readJobFile, resolveJobFile } from "./state.mjs";
+import { getConfig, listJobs, readJobFile, resolveJobsDir, resolveJobFile } from "./state.mjs";
 import { SESSION_ID_ENV } from "./tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
 
@@ -180,8 +181,8 @@ export function enrichJob(job, options = {}) {
   };
 }
 
-export function readStoredJob(workspaceRoot, jobId) {
-  const jobFile = resolveJobFile(workspaceRoot, jobId);
+export function readStoredJob(workspaceRoot, jobId, env = process.env) {
+  const jobFile = path.join(resolveJobsDir(workspaceRoot, env), `${jobId}.json`);
   if (!fs.existsSync(jobFile)) {
     return null;
   }

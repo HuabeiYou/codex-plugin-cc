@@ -1120,9 +1120,11 @@ export async function runAppServerTurn(cwd, options = {}) {
   return withAppServer(cwd, async (client) => {
     let threadId;
     let selectedModel;
+    let selectedEffort;
     if (options.signal?.aborted) throw new Error("Codex task interrupted before startup.");
 
     if (options.resumeThreadId) {
+      if (options.unarchiveThread) await client.request('thread/unarchive', { threadId: options.resumeThreadId });
       emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
       const response = await resumeThread(client, options.resumeThreadId, cwd, {
         model: options.model,
@@ -1131,6 +1133,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       });
       threadId = response.thread.id;
       selectedModel = response.model;
+      selectedEffort = response.reasoningEffort;
     } else {
       emitProgress(options.onProgress, "Starting Codex task thread.", "starting");
       const response = await startThread(client, cwd, {
@@ -1141,13 +1144,14 @@ export async function runAppServerTurn(cwd, options = {}) {
       });
       threadId = response.thread.id;
       selectedModel = response.model;
+      selectedEffort = response.reasoningEffort;
     }
 
     emitProgress(options.onProgress, `Thread ready (${threadId}).`, "starting", {
       threadId
     });
 
-    options.onReady?.({ threadId, model: selectedModel, appServerPid: client.proc?.pid ?? null });
+    options.onReady?.({ threadId, model: selectedModel, effort: options.effort ?? selectedEffort ?? null, appServerPid: client.proc?.pid ?? null });
     if (options.signal?.aborted) throw new Error("Codex task interrupted before turn startup.");
     const prompt = options.prompt?.trim() || options.defaultPrompt || "";
     if (!prompt) {

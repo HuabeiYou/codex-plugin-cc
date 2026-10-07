@@ -8,6 +8,9 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { executeNativeTask } from "../../codex/scripts/codex-companion.mjs";
 import { pluginEnvironment } from "../../codex/scripts/lib/plugin-context.mjs";
+import { CodexAppServerClient } from "../../codex/scripts/lib/app-server.mjs";
+import { readStoredJob } from "../../codex/scripts/lib/job-control.mjs";
+import { resolveWorkspaceRoot } from "../../codex/scripts/lib/workspace.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -111,18 +114,18 @@ async function execute(prompt, signal, emit, nativeRunId, resumeFrom) {
             }
           }
         }
-        emit({ kind: 'activity', threadId: p.threadId, turnId: p.turnId, type: item.type,
+        emit({ kind: 'activity', threadId: p.threadId, turnId: p.turnId, itemId: item.id, type: item.type,
           label: itemLabel(item).slice(0, 1200), status: message.method === 'item/started' ? 'running' : item.status ?? 'completed' });
       } else if (message.method === 'item/agentMessage/delta' && p.threadId === threadId) {
         texts.set(p.itemId, (texts.get(p.itemId) ?? '') + p.delta);
         if (!phases.has(p.itemId)) pending.set(p.itemId, (pending.get(p.itemId) ?? '') + p.delta);
         else if (phases.get(p.itemId) !== 'commentary') emitText(p.itemId, p.delta);
       } else if (message.method === 'item/commandExecution/outputDelta') {
-        emit({ kind: 'activity', threadId: p.threadId, turnId: p.turnId, type: 'commandOutput', label: p.delta.slice(-1200), status: 'running' });
+        emit({ kind: 'activity', threadId: p.threadId, turnId: p.turnId, itemId: p.itemId, type: 'commandOutput', label: p.delta.slice(-1200), status: 'running' });
       } else if (message.method === 'turn/started' && p.threadId === threadId) {
         emit({ kind: 'activity', threadId, turnId: p.turn.id, type: 'turn', label: 'Codex turn started', status: 'running' });
       } else if (message.method === 'thread/started') {
-        emit({ kind: 'activity', threadId: p.thread.id, label: p.thread.agentNickname || 'Codex thread', status: 'starting' });
+        emit({ kind: 'activity', threadId: p.thread.id, type: 'thread', label: p.thread.agentNickname || 'Codex thread', status: 'starting' });
       }
     }
   });
@@ -132,7 +135,49 @@ async function execute(prompt, signal, emit, nativeRunId, resumeFrom) {
     touchedFiles: execution.payload.touchedFiles };
 }
 
-export async function runCodex({ cwd, prompt, runId, signal, env = process.env, timeoutMs }, emit) {
+// Only completed, checkpoint-bound workers from the ending Claude session are
+// eligible. Keep their reports and exact thread binding for later feedback.
+export async function archiveNativeRuns({ runIds, sessionId }, env = process.env) {
+  if (!Array.isArray(runIds) || typeof sessionId !== 'string' || !sessionId) throw new Error('Owned worker IDs and session are required.');
+  env = pluginEnvironment(pluginRoot, env);
+  const archived = [], skipped = [], errors = [];
+  const owned = [...new Set(runIds)];
+  if (owned.some((id) => fs.existsSync(controlDirectory(id)))) return { archived, skipped: owned, errors };
+  const clients = new Map();
+  try {
+    for (const runId of owned) {
+      const directory = controlDirectory(runId);
+      const file = reportPath(runId, env) + '.checkpoint.json';
+      if (fs.existsSync(directory) || !fs.existsSync(file)) { skipped.push(runId); continue; }
+      const checkpoint = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const ready = checkpoint.ready;
+      if (checkpoint.result?.status !== 'completed' || !ready || checkpoint.archived) { skipped.push(runId); continue; }
+      const job = readStoredJob(resolveWorkspaceRoot(checkpoint.cwd), ready.jobId, env);
+      if (!job || job.nativeRunId !== runId || job.sessionId !== sessionId || job.threadId !== ready.threadId || job.status !== 'completed') {
+        skipped.push(runId); continue;
+      }
+      try { fs.mkdirSync(directory, { mode: 0o700 }); }
+      catch (error) { if (error.code === 'EEXIST') { skipped.push(runId); continue; } throw error; }
+      try {
+        let client = clients.get(checkpoint.cwd);
+        if (!client) {
+          client = await CodexAppServerClient.connect(checkpoint.cwd, { env, disableBroker: true });
+          clients.set(checkpoint.cwd, client);
+        }
+        await client.request('thread/archive', { threadId: ready.threadId });
+        checkpoint.archived = true;
+        const temporary = file + '.' + process.pid + '.tmp';
+        fs.writeFileSync(temporary, JSON.stringify(checkpoint), { mode: 0o600 });
+        fs.renameSync(temporary, file);
+        archived.push(runId);
+      } catch (error) { errors.push({ runId, message: error.message }); }
+      finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    }
+  } finally { await Promise.allSettled([...clients.values()].map((client) => client.close())); }
+  return { archived, skipped, errors };
+}
+
+export async function runCodex({ cwd, prompt, runId, requestId, signal, env = process.env, timeoutMs }, emit) {
   taskRequest(prompt);
   env = pluginEnvironment(pluginRoot, env);
   const directory = controlDirectory(runId);
@@ -140,7 +185,7 @@ export async function runCodex({ cwd, prompt, runId, signal, env = process.env, 
   fs.mkdirSync(path.dirname(reportFile), { recursive: true, mode: 0o700 });
   const checkpointFile = reportFile + '.checkpoint.json';
   const canonicalCwd = fs.realpathSync(cwd);
-  let checkpoint = { cwd: canonicalCwd, prompt };
+  let checkpoint = { cwd: canonicalCwd, prompt, requestId };
   let resumeFrom;
   if (fs.existsSync(checkpointFile)) {
     const inspect = () => JSON.parse(fs.readFileSync(checkpointFile, 'utf8'));
@@ -154,14 +199,22 @@ export async function runCodex({ cwd, prompt, runId, signal, env = process.env, 
     }
     if (fs.existsSync(directory)) throw new Error('The prior native run is still owned by another host.');
     checkpoint = inspect();
-    if (checkpoint.result && checkpoint.result.status !== 'interrupted') return { ...checkpoint.result, reportFile };
-    if (!checkpoint.ready || checkpoint.result?.status !== 'interrupted') {
+    const feedback = Boolean(requestId && checkpoint.requestId !== requestId);
+    if (!feedback && checkpoint.result && checkpoint.result.status !== 'interrupted') return { ...checkpoint.result, reportFile };
+    if (!checkpoint.ready || (!feedback && checkpoint.result?.status !== 'interrupted')) {
       throw new Error('Native checkpoint stopped before its interrupted Codex thread was saved.');
     }
-    resumeFrom = { jobId: checkpoint.ready.jobId, threadId: checkpoint.ready.threadId, sessionId: checkpoint.ready.sessionId };
+    resumeFrom = { jobId: checkpoint.ready.jobId, threadId: checkpoint.ready.threadId, sessionId: checkpoint.ready.sessionId,
+      feedback, archived: checkpoint.archived === true };
     const controls = taskRequest(checkpoint.prompt);
-    prompt = JSON.stringify({ task: 'Continue the interrupted task from this thread. Keep the original task scope and constraints.',
-      write: controls.write, model: controls.model || checkpoint.ready.model, effort: controls.effort });
+    const nextControls = feedback ? taskRequest(prompt) : {};
+    if (nextControls.resumeLast) throw new Error('An existing native worker continues its own topic; resumeLast is only for a new worker.');
+    prompt = JSON.stringify({ task: feedback ? nextControls.prompt : 'Continue the interrupted task from this thread. Keep the original task scope and constraints.',
+      write: controls.write && nextControls.write !== false,
+      model: nextControls.model || controls.model || checkpoint.ready.model,
+      effort: nextControls.effort || controls.effort || checkpoint.ready.effort || undefined });
+    checkpoint.prompt = prompt;
+    checkpoint.requestId = requestId || checkpoint.requestId;
   }
   fs.mkdirSync(directory, { mode: 0o700 });
   const saveCheckpoint = () => {
@@ -202,7 +255,7 @@ export async function runCodex({ cwd, prompt, runId, signal, env = process.env, 
             if (event.kind === 'result') result = event;
             else if (event.kind === 'error') stderr = event.message;
             else {
-              if (event.kind === 'ready') { checkpoint.ready = event; saveCheckpoint(); }
+              if (event.kind === 'ready') { checkpoint.ready = event; checkpoint.archived = false; saveCheckpoint(); }
               if (event.kind === 'ready' && timeoutMs !== undefined) deadline = setTimeout(() => { deadlineExceeded = true; stop(); }, timeoutMs);
               emit({ ...event, reportFile, ...(event.kind === 'ready' ? { pluginData: env.CLAUDE_PLUGIN_DATA } : {}) });
             }
@@ -242,6 +295,10 @@ export async function runCodex({ cwd, prompt, runId, signal, env = process.env, 
 
 async function main() {
   const [command, runId] = process.argv.slice(2);
+  if (command === 'archive') {
+    console.log(JSON.stringify(await archiveNativeRuns(JSON.parse(process.argv[3]))));
+    return;
+  }
   if (command === 'bind-output') { console.log(JSON.stringify(bindOutput(runId, process.argv[4], process.argv[5]))); return; }
   if (command === 'report-path') {
     const reportFile = reportPath(runId);
@@ -264,7 +321,7 @@ async function main() {
   try {
     const request = JSON.parse(fs.readFileSync(0, 'utf8'));
     const result = command === 'execute' ? await execute(request.prompt, controller.signal, emit, request.nativeRunId, request.resumeFrom)
-      : await runCodex({ cwd: process.cwd(), prompt: request.prompt, runId, signal: controller.signal }, emit);
+      : await runCodex({ cwd: process.cwd(), prompt: request.prompt, requestId: request.requestId, runId, signal: controller.signal }, emit);
     emit({ kind: 'result', ...result });
     process.exitCode = result.status === 'completed' ? 0 : result.status === 'interrupted' ? 130 : 1;
   } finally { process.off('SIGTERM', stop); process.off('SIGINT', stop); }

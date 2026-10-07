@@ -471,8 +471,9 @@ async function executeTaskRun(request) {
   if (request.resumeFrom) {
     const saved = readStoredJob(workspaceRoot, request.resumeFrom.jobId);
     if (!saved || saved.nativeRunId !== request.nativeRunId || saved.threadId !== request.resumeFrom.threadId
-        || saved.sessionId !== request.resumeFrom.sessionId || saved.status !== 'cancelled') {
-      throw new Error('The native checkpoint does not match an interrupted owned Codex job.');
+        || saved.sessionId !== request.resumeFrom.sessionId
+        || !(request.resumeFrom.feedback ? ['completed', 'failed', 'cancelled'] : ['cancelled']).includes(saved.status)) {
+      throw new Error('The native checkpoint does not match a resumable owned Codex job.');
     }
     resumeThreadId = saved.threadId;
   } else if (request.resumeLast) {
@@ -491,6 +492,7 @@ async function executeTaskRun(request) {
 
   const result = await runAppServerTurn(workspaceRoot, {
     resumeThreadId,
+    unarchiveThread: request.resumeFrom?.archived === true,
     prompt: request.prompt,
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,

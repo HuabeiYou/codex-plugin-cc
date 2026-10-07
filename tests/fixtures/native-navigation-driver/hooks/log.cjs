@@ -12,8 +12,9 @@ else if (process.argv[2] === 'claim') {
   const event = JSON.parse(process.argv[2]);
   if (event.type === 'restore.ownership') {
     const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
-    const ready = rows.filter((r) => r.type === 'bridge.chunk').flatMap((r) => {
-      try { const e = JSON.parse(r.text); return e.kind === 'ready' ? [e] : []; } catch { return []; }
+    // A pipe chunk can contain several JSONL events or part of one event.
+    const ready = rows.filter((r) => r.type === 'bridge.chunk').map((r) => r.text).join('').split('\n').flatMap((line) => {
+      try { const e = JSON.parse(line); return e.kind === 'ready' ? [e] : []; } catch { return []; }
     });
     if (ready.length > 1) {
       try { process.kill(ready[0].appServerPid, 0); event.priorAppServerAlive = true; }

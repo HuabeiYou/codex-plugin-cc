@@ -12,6 +12,9 @@ let childMessages = [];
 const activityNotices = [];
 const openedPanes = [];
 const bridgeControls = [];
+const launches = [];
+const completions = [];
+let reuseMode = false;
 export function register(on) {
   on('process.run', async ($, e, next) => {
     const response = await next(e);
@@ -28,7 +31,7 @@ export function register(on) {
     return next(e);
   });
   on('process.spawn', async function* ($, e, next) {
-    if (!e.argv.some((arg) => arg.endsWith('/codex-native-prototype/scripts/bridge.mjs') || arg.endsWith('/scripts/native-bridge.mjs'))) return yield* next(e);
+    if (e.argv[2] !== 'run' || !e.argv.some((arg) => arg.endsWith('/scripts/bridge.mjs') || arg.endsWith('/scripts/native-bridge.mjs'))) return yield* next(e);
     let buffer = '';
     const stream = next(e);
     while (true) {
@@ -49,6 +52,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) {
       child = { agentId: e.agentId, answer: e.answer, isAborted: e.isAborted, reason: e.reason, turnId: e.turnId };
+      completions.push(child);
       const found = await $.session.messages({ agentId: e.agentId });
       if (Array.isArray(found)) childMessages = found;
     }
@@ -57,6 +61,7 @@ export function register(on) {
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const response = await next(e);
     result = response;
+    if (response.result?.agentId) launches.push(response.result);
     return response;
   });
   on('tool.call', { tool: 'TaskStop' }, async ($, e, next) => {
@@ -76,11 +81,45 @@ export function register(on) {
       const task = await $.env.get('CODEX_NATIVE_ACCEPTANCE_TASK') || 'Read README.md and describe this repository in one sentence. Do not edit anything.';
       cancelMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_CANCEL') === '1';
       backgroundMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_BACKGROUND') === '1';
+      reuseMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_REUSE') === '1';
       const input = { subagent_type: await $.env.get('CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE') || 'codex-native-prototype:worker', description: 'Native acceptance', prompt: task, run_in_background: backgroundMode || cancelMode };
       yield { kind: 'tool', index: 0, id: 'native_acceptance_agent', name: 'Agent' };
       yield { kind: 'input', index: 0, json: JSON.stringify(input) };
       yield { kind: 'stop', stopReason: 'tool_use', usage: null };
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'Agent', input }], stopReason: 'tool_use', usage: null };
+    }
+    if (reuseMode && (steps === 2 || steps === 3)) {
+      const input = { subagent_type: await $.env.get('CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE'),
+        description: steps === 2 ? 'Adversarial reviewer' : 'Unrelated topic',
+        prompt: JSON.stringify({ write: false, task: steps === 2 ? 'Adversarial review of the implementation.' : 'Investigate another topic.' }),
+        run_in_background: false };
+      yield { kind: 'tool', index: 0, id: `native_acceptance_topic_${steps}`, name: 'Agent' };
+      yield { kind: 'input', index: 0, json: JSON.stringify(input) };
+      yield { kind: 'stop', stopReason: 'tool_use', usage: null };
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'Agent', input }], stopReason: 'tool_use', usage: null };
+    }
+    if (reuseMode && (steps === 4 || steps === 5)) {
+      if (steps === 5) {
+        for (let attempt = 0; attempt < 80 && bridgeEvents.filter((event) => event.kind === 'result').length < 4; attempt++) await $.clock.sleep(100);
+        if (bridgeEvents.filter((event) => event.kind === 'result').length < 4) throw new Error('Implementation feedback did not execute a Codex turn.');
+      }
+      const index = steps === 4 ? 0 : 1;
+      const input = { to: launches[index].agentId,
+        message: index === 0 ? 'Fix the review findings on your original implementation.' : 'I addressed your findings. Re-review the revised implementation.',
+        summary: index === 0 ? 'Address original implementation review findings' : 'Re-review revised implementation after your feedback' };
+      yield { kind: 'tool', index: 0, id: `native_acceptance_feedback_${index}`, name: 'SendMessage' };
+      yield { kind: 'input', index: 0, json: JSON.stringify(input) };
+      yield { kind: 'stop', stopReason: 'tool_use', usage: null };
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'SendMessage', input }], stopReason: 'tool_use', usage: null };
+    }
+    if (reuseMode) {
+      for (let attempt = 0; attempt < 80 && bridgeEvents.filter((event) => event.kind === 'result').length < 5; attempt++) await $.clock.sleep(100);
+      if (bridgeEvents.filter((event) => event.kind === 'result').length < 5) throw new Error('Re-review feedback did not execute a Codex turn.');
+      await $.clock.sleep(200);
+      const answer = JSON.stringify({ launches, completions, bridgeEvents, bridgeControls, openedPanes });
+      yield { kind: 'text', index: 0, text: answer };
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null };
+      return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: 'end_turn', usage: null };
     }
     if (backgroundMode && !cancelMode && steps === 2) {
       for (let attempt = 0; attempt < 300 && !child; attempt++) await $.clock.sleep(100);
