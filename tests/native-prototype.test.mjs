@@ -160,17 +160,19 @@ test("native cancellation sends turn/interrupt to the owning thread and waits fo
 test("native agent abort interrupts Codex and cleanup completes before the bridge returns", async () => {
   const options = fixture("interruptible-slow-task");
   const controller = new AbortController();
-  // Abort after turn/start rather than before the turn exists.
-  const timer = setInterval(() => {
-    const statePath = path.join(options.bin, "fake-codex-state.json");
-    if (fs.existsSync(statePath) && JSON.parse(fs.readFileSync(statePath)).lastTurnStart) controller.abort();
-  }, 20);
-  try {
-    const result = await runCodex({ ...options, signal: controller.signal }, () => {});
-    assert.equal(result.status, "interrupted");
-    const state = JSON.parse(fs.readFileSync(path.join(options.bin, "fake-codex-state.json")));
-    assert.ok(state.lastInterrupt);
-  } finally { clearInterval(timer); }
+  let pid;
+  const result = await runCodex({ ...options, signal: controller.signal }, (event) => {
+    if (event.kind === "ready") pid = event.appServerPid;
+    // Wait for the protocol event; the fixture's state file can be mid-write.
+    if (event.type === "turn") controller.abort();
+  });
+  assert.equal(result.status, "interrupted");
+  const state = JSON.parse(fs.readFileSync(path.join(options.bin, "fake-codex-state.json")));
+  assert.equal(state.lastInterrupt.threadId, state.lastTurnStart.threadId);
+  assert.equal(state.lastInterrupt.turnId, state.lastTurnStart.turnId);
+  assert.ok(pid);
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  assert.equal(fs.existsSync(path.join(os.tmpdir(), `codex-native-prototype-${options.runId}`)), false);
 });
 
 test("a connected task timeout fails visibly and cleans up its app-server and control directory", async () => {
