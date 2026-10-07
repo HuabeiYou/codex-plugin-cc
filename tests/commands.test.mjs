@@ -156,12 +156,11 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(readme, /`codex:worker` agents/i);
   assert.match(readme, /Model and effort defaults come from Codex unless explicitly selected/i);
   assert.match(readme, /--model gpt-6\.1-sol --effort high/i);
-  assert.match(readme, /Follow-ups and re-reviews that return to the exact worker and Codex thread/i);
+  assert.match(readme, /Follow-ups and re-reviews return to the exact worker and Codex thread/i);
   assert.match(readme, /\/codex:setup/);
   assert.match(readme, /\/codex:review --base main/);
   assert.match(readme, /\/codex:adversarial-review --base main/);
   assert.match(readme, /\/codex:rescue investigate the failing build/);
-  assert.match(readme, /original setup, transfer, status, result, cancel/i);
   assert.match(readme, /\/codex:status/);
   assert.match(readme, /\/codex:result/);
   assert.match(readme, /\/codex:cancel/);

@@ -17,7 +17,19 @@ Commit generated `release/` with the preparation changes. Its host SDK types are
 
 After the maintainer approves the prepared commit and qualification, merge into the default branch: GitHub marketplace installs follow that branch. Create a matching `v<version>` tag and GitHub prerelease with the versioned notes, ZIP, and checksum. No workflow publishes automatically.
 
-Restart after updates. An earlier local `codex@huabei-codex` trial must be uninstalled with `--keep-data` before installing `codex@codex-companion`. Preserve attribution and license. Upstream contributions remain independent of this release.
+Restart after updates. Preserve attribution and license. Upstream contributions remain independent of this release.
+
+## Rollback
+
+Finish delegated work and close Claude, then restore the official plugin:
+
+```bash
+claude plugin uninstall codex@codex-companion --scope user --keep-data
+claude plugin marketplace add openai/codex-plugin-cc
+claude plugin install codex@openai-codex --scope user
+```
+
+Restart Claude. `--keep-data` preserves plugin data; removing the plugin does not uninstall Codex or change provider credentials.
 
 ## Qualification boundaries
 

@@ -11,7 +11,7 @@ npm run release:test
 
 The builder excludes generated host SDK declarations; acceptance obtains fresh declarations in a temporary copy. A fresh checkout needs no interactive session to bootstrap types.
 
-Finish delegated work and close Claude sessions before changing installed packages. If present, uninstall `codex@openai-codex` or the older `codex@huabei-codex` with `--scope user --keep-data`. Register the local standalone marketplace:
+Finish delegated work and close Claude sessions before changing installed packages. If present, uninstall `codex@openai-codex` with `--scope user --keep-data`. Register the local standalone marketplace:
 
 ```bash
 claude plugin marketplace add "$PWD/release"
