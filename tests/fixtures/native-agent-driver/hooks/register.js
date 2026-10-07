@@ -15,6 +15,20 @@ const bridgeControls = [];
 const launches = [];
 const completions = [];
 let reuseMode = false;
+let realWorkflowMode = false;
+const feedbackCheckpoints = [];
+const feedbackReceipts = [];
+const reportReads = [];
+const requestBaselines = new Map();
+
+async function waitForFeedbackCheckpoint($, index) {
+  const ready = bridgeEvents.filter((event) => event.kind === 'ready')[index];
+  if (!ready?.reportFile) throw new Error('Initial worker report binding is missing.');
+  const response = await $.process.run(['node', `${$.plugin.root}/scripts/wait-for-report.mjs`, ready.reportFile, requestBaselines.get(index)]);
+  if (response.exitCode !== 0) throw new Error(response.stderr || 'Real feedback did not deliver a completed report.');
+  feedbackCheckpoints.push({ ...JSON.parse(response.stdout), agentId: launches[index].agentId });
+  return ready.reportFile;
+}
 export function register(on) {
   on('process.run', async ($, e, next) => {
     const response = await next(e);
@@ -72,6 +86,12 @@ export function register(on) {
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     const response = await next(e);
     feedback = { isError: response.isError ?? false, text: JSON.stringify(response.result) };
+    if (realWorkflowMode) reportReads.push(feedback);
+    return response;
+  });
+  on('tool.call', { tool: 'SendMessage' }, async ($, e, next) => {
+    const response = await next(e);
+    if (realWorkflowMode) feedbackReceipts.push({ requestedAgentId: e.to, isError: response.isError ?? false, result: response.result });
     return response;
   });
   on('turn.step', async function* ($, e, next) {
@@ -82,6 +102,7 @@ export function register(on) {
       cancelMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_CANCEL') === '1';
       backgroundMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_BACKGROUND') === '1';
       reuseMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_REUSE') === '1';
+      realWorkflowMode = await $.env.get('CODEX_NATIVE_ACCEPTANCE_REAL_WORKFLOW') === '1';
       const input = { subagent_type: await $.env.get('CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE') || 'codex-native-prototype:worker', description: 'Native acceptance', prompt: task, run_in_background: backgroundMode || cancelMode };
       yield { kind: 'tool', index: 0, id: 'native_acceptance_agent', name: 'Agent' };
       yield { kind: 'input', index: 0, json: JSON.stringify(input) };
@@ -91,21 +112,37 @@ export function register(on) {
     if (reuseMode && (steps === 2 || steps === 3)) {
       const input = { subagent_type: await $.env.get('CODEX_NATIVE_ACCEPTANCE_AGENT_TYPE'),
         description: steps === 2 ? 'Adversarial reviewer' : 'Unrelated topic',
-        prompt: JSON.stringify({ write: false, task: steps === 2 ? 'Adversarial review of the implementation.' : 'Investigate another topic.' }),
+        prompt: JSON.stringify({ write: false, task: realWorkflowMode
+          ? steps === 2 ? 'Read greeting.mjs and greeting.test.mjs. Review whether greet("") returns "Hello, world!" as required. Report the concrete mismatch and remedy. Do not edit files or configuration.' : 'Read greeting.test.mjs and describe its test coverage in one sentence. Do not edit files or configuration.'
+          : steps === 2 ? 'Adversarial review of the implementation.' : 'Investigate another topic.' }),
         run_in_background: false };
       yield { kind: 'tool', index: 0, id: `native_acceptance_topic_${steps}`, name: 'Agent' };
       yield { kind: 'input', index: 0, json: JSON.stringify(input) };
       yield { kind: 'stop', stopReason: 'tool_use', usage: null };
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'Agent', input }], stopReason: 'tool_use', usage: null };
     }
-    if (reuseMode && (steps === 4 || steps === 5)) {
-      if (steps === 5) {
+    if (realWorkflowMode && (steps === 5 || steps === 7)) {
+      const input = { file_path: await waitForFeedbackCheckpoint($, steps === 5 ? 0 : 1) };
+      yield { kind: 'tool', index: 0, id: `native_acceptance_read_feedback_${steps}`, name: 'Read' };
+      yield { kind: 'input', index: 0, json: JSON.stringify(input) };
+      yield { kind: 'stop', stopReason: 'tool_use', usage: null };
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'Read', input }], stopReason: 'tool_use', usage: null };
+    }
+    if (reuseMode && (steps === 4 || steps === (realWorkflowMode ? 6 : 5))) {
+      if (!realWorkflowMode && steps === 5) {
         for (let attempt = 0; attempt < 80 && bridgeEvents.filter((event) => event.kind === 'result').length < 4; attempt++) await $.clock.sleep(100);
         if (bridgeEvents.filter((event) => event.kind === 'result').length < 4) throw new Error('Implementation feedback did not execute a Codex turn.');
       }
       const index = steps === 4 ? 0 : 1;
+      if (realWorkflowMode) {
+        const ready = bridgeEvents.filter((event) => event.kind === 'ready')[index];
+        const checkpoint = JSON.parse(await $.fs.read(ready.reportFile + '.checkpoint.json'));
+        requestBaselines.set(index, checkpoint.requestId);
+      }
       const input = { to: launches[index].agentId,
-        message: index === 0 ? 'Fix the review findings on your original implementation.' : 'I addressed your findings. Re-review the revised implementation.',
+        message: realWorkflowMode
+          ? index === 0 ? 'Update your original greeting.mjs so greet("") returns "Hello, world!" while greet("Ada") still returns "Hello, Ada!". Add the empty-name regression case to greeting.test.mjs and run node --test greeting.test.mjs. Only edit those two files; do not commit, install packages, or change configuration.' : 'The implementation now handles an empty name. Re-read greeting.mjs and greeting.test.mjs, run node --test greeting.test.mjs, and re-review your original finding. Report whether resolved, still open, or newly introduced. Do not edit files or configuration.'
+          : index === 0 ? 'Fix the review findings on your original implementation.' : 'I addressed your findings. Re-review the revised implementation.',
         summary: index === 0 ? 'Address original implementation review findings' : 'Re-review revised implementation after your feedback' };
       yield { kind: 'tool', index: 0, id: `native_acceptance_feedback_${index}`, name: 'SendMessage' };
       yield { kind: 'input', index: 0, json: JSON.stringify(input) };
@@ -113,10 +150,12 @@ export function register(on) {
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'SendMessage', input }], stopReason: 'tool_use', usage: null };
     }
     if (reuseMode) {
-      for (let attempt = 0; attempt < 80 && bridgeEvents.filter((event) => event.kind === 'result').length < 5; attempt++) await $.clock.sleep(100);
-      if (bridgeEvents.filter((event) => event.kind === 'result').length < 5) throw new Error('Re-review feedback did not execute a Codex turn.');
+      if (!realWorkflowMode) {
+        for (let attempt = 0; attempt < 80 && bridgeEvents.filter((event) => event.kind === 'result').length < 5; attempt++) await $.clock.sleep(100);
+        if (bridgeEvents.filter((event) => event.kind === 'result').length < 5) throw new Error('Re-review feedback did not execute a Codex turn.');
+      }
       await $.clock.sleep(200);
-      const answer = JSON.stringify({ launches, completions, bridgeEvents, bridgeControls, openedPanes });
+      const answer = JSON.stringify({ launches, completions, bridgeEvents, bridgeControls, openedPanes, feedbackCheckpoints, feedbackReceipts, reportReads });
       yield { kind: 'text', index: 0, text: answer };
       yield { kind: 'stop', stopReason: 'end_turn', usage: null };
       return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: 'end_turn', usage: null };

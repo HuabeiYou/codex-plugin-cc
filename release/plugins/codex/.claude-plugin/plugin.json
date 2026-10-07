@@ -1,0 +1,11 @@
+{
+  "name": "codex",
+  "version": "1.1.0-beta.1",
+  "description": "Codex Companion: native Codex workers, live activity, and persistent topic conversations in Claude Code.",
+  "author": {
+    "name": "HuabeiYou"
+  },
+  "homepage": "https://github.com/HuabeiYou/codex-plugin-cc",
+  "repository": "https://github.com/HuabeiYou/codex-plugin-cc",
+  "license": "Apache-2.0"
+}

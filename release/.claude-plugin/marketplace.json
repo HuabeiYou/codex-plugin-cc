@@ -1,0 +1,21 @@
+{
+  "name": "codex-companion",
+  "owner": {
+    "name": "HuabeiYou"
+  },
+  "metadata": {
+    "description": "Independent Codex integration with native Claude workers.",
+    "version": "1.1.0-beta.1"
+  },
+  "plugins": [
+    {
+      "name": "codex",
+      "version": "1.1.0-beta.1",
+      "source": "./plugins/codex",
+      "description": "Codex Companion: native workers, live activity, and persistent topic conversations.",
+      "author": {
+        "name": "HuabeiYou"
+      }
+    }
+  ]
+}

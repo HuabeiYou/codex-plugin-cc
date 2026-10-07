@@ -1,4 +1,4 @@
-# Native Codex worker
+# Codex Companion native worker source
 
 The worker runs the existing rescue task runtime inside Claude's native Agent lifecycle. It supports implementation, debugging, file edits, explicit model and effort selection, and continuation of a tracked Codex thread. Claude owns completion and reads the report automatically. The activity view is optional user inspection.
 
@@ -38,7 +38,7 @@ The native bridge calls `executeNativeTask` in the companion. Both native work a
 
 Each native task stays attached until completion; there is no fixed two-minute task limit. Its default sandbox is `workspace-write`, with the same `approvalPolicy: never` as rescue. Explicit read-only scope uses `read-only`. The Mod inherits the configured Codex provider and model unless the user selects a model.
 
-Opening Claude's agents view can move the parent and its workers to another host session. The worker definition is available before adoption; an aborted checkpoint stays unfinished. A no-tools MCP startup handshake makes adoption wait for this host's Mod to load. The Mod restores the exact worker identity and resumes its interrupted Codex thread. Claude receives completion feedback and reads the report in the new session. Native jobs and companion status share the plugin data store. An arbitrary exit or restart still does not guarantee automatic restoration. The standalone official plugin source retains its forwarding agent; only our single-plugin bundle removes it.
+Opening Claude's agents view can move the parent and its workers to another host session. The worker definition is available before adoption; an aborted checkpoint stays unfinished. A no-tools MCP startup handshake makes adoption wait for this host's Mod to load. The Mod restores the exact worker identity and resumes its interrupted Codex thread. Claude receives completion feedback and reads the report in the new session. Native jobs and companion status share the plugin data store. An arbitrary exit or restart still does not guarantee automatic restoration. The companion source retains its forwarding agent; the combined release removes it.
 
 A failed bridge returns a visible error. Repeated native model steps reuse the result instead of executing the task again. Ordinary Claude agents pass through unchanged. Parent feedback uses native Agent completion and its output-file handle. The Mod saves the full Codex report at that native task artifact; this also supports headless background workers whose Mod-supplied answers do not create a model transcript. It replaces only the owned worker's temporary output artifact, leaving transcript files untouched. Reports are also retained under the plugin data directory's `native-reports` folder.
 

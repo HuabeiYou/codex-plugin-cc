@@ -147,6 +147,7 @@ vite.config.ts.timestamp-*
 .vite/
 
 output/
+release/plugins/codex/.claude-plugin/types/
 plugins/codex/.generated/
 plugins/codex-native-prototype/.claude-plugin/types/
 tests/fixtures/native-agent-driver/.claude-plugin/types/

@@ -2,13 +2,16 @@ name: Pull Request CI
 
 on:
   pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   ci:
-    name: CI
+    name: Runtime and package
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -26,10 +29,55 @@ jobs:
         run: npm ci
 
       - name: Install Codex CLI
-        run: npm install -g @openai/codex
+        run: npm install -g @openai/codex@0.160.0
+
+      - name: Verify release versions and deterministic package
+        run: npm run release:check
 
       - name: Run test suite
         run: npm test
 
       - name: Run build
         run: npm run build
+
+  native:
+    name: macOS native package
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      CODEX_NATIVE_ACCEPTANCE_NO_USER_CONFIG: '1'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies and pinned hosts
+        run: |
+          npm ci
+          npm install -g @openai/codex@0.160.0 @anthropic-ai/claude-code@2.1.292
+
+      - name: Validate release and native manifests
+        run: npm run release:validate
+
+      - name: Native Mod and real Claude lifecycle tests with simulated Codex
+        run: npm run release:test
+
+      - name: Install root marketplace in isolated configuration
+        run: npm run release:install:test
+
+      - name: Package standalone marketplace
+        run: npm run release:pack
+
+      - name: Retain release candidate assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-companion-beta
+          path: |
+            output/codex-companion-*.zip
+            output/codex-companion-*.zip.sha256
+          if-no-files-found: error

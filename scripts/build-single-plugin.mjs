@@ -23,7 +23,7 @@ const writeJson = (file, value) => {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
 };
 
-export function buildSinglePlugin(destination = BUNDLE_ROOT) {
+export function buildSinglePlugin(destination = BUNDLE_ROOT, { release = false } = {}) {
   const markerFile = path.join(destination, 'bundle-manifest.json');
   if (fs.existsSync(destination)) {
     if (!fs.existsSync(markerFile) || json(markerFile).generator !== MARKER) {
@@ -47,14 +47,21 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   const nativeManifest = json(path.join(native, '.claude-plugin', 'plugin.json'));
   const hash = createHash('sha256');
   for (const name of ['agents', 'commands', 'hooks', 'skills', 'scripts', 'schemas', 'prompts']) hashFiles(hash, path.join(official, name));
+  for (const name of ['NOTICE', 'LICENSE', 'CHANGELOG.md', '.claude-plugin/plugin.json']) hash.update(fs.readFileSync(path.join(official, name)));
   for (const name of ['agents', 'hooks', 'scripts', 'skills', 'tests', 'commands']) hashFiles(hash, path.join(native, name));
   hash.update(fs.readFileSync(fileURLToPath(import.meta.url)));
   hash.update(fs.readFileSync(path.join(native, '.mcp.json')));
-  const version = `${baseManifest.version}-native.${nativeManifest.version}.h${hash.digest('hex').slice(0, 12)}`;
+  hash.update(fs.readFileSync(path.join(native, '.claude-plugin/plugin.json')));
+  hash.update(fs.readFileSync(path.join(native, 'tsconfig.json')));
+  const sourceHash = hash.digest('hex');
+  const version = release ? baseManifest.version : `${baseManifest.version}-native.${nativeManifest.version}.h${sourceHash.slice(0, 12)}`;
   writeJson(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), {
     ...baseManifest, version,
-    description: 'Codex for Claude Code: patched companion runtime, native agents, live activity, and parent supervision.',
-    author: { name: 'HuabeiYou' }
+    description: 'Codex Companion: native Codex workers, live activity, and persistent topic conversations in Claude Code.',
+    author: { name: 'HuabeiYou' },
+    homepage: 'https://github.com/HuabeiYou/codex-plugin-cc',
+    repository: 'https://github.com/HuabeiYou/codex-plugin-cc',
+    license: 'Apache-2.0'
   });
   const hooks = json(path.join(official, 'hooks', 'hooks.json'));
   writeJson(path.join(pluginRoot, 'hooks', 'hooks.json'), { ...hooks, modules: ['./native/register.js'] });
@@ -75,20 +82,24 @@ export function buildSinglePlugin(destination = BUNDLE_ROOT) {
   // Claude's test runner loads an isolated copy and does not populate the
   // source package's declarations. Retain the local SDK for bundle typechecks.
   const modTypes = path.join(native, '.claude-plugin', 'types');
-  if (fs.existsSync(modTypes)) fs.cpSync(modTypes, path.join(pluginRoot, '.claude-plugin', 'types'), { recursive: true });
+  if (!release && fs.existsSync(modTypes)) fs.cpSync(modTypes, path.join(pluginRoot, '.claude-plugin', 'types'), { recursive: true });
   fs.mkdirSync(path.join(pluginRoot, 'tests'), { recursive: true });
   fs.writeFileSync(path.join(pluginRoot, 'tests', 'native-mod.test.ts'), namespace(fs.readFileSync(path.join(native, 'tests', 'native-mod.test.ts'), 'utf8')));
   fs.writeFileSync(path.join(pluginRoot, 'README.md'), [
-    '# Codex for Claude Code', '',
-    'One plugin combines the patched companion runtime and the experimental native Mod. Claude supervises agents and reads their feedback automatically.', '',
-    'Use `codex:worker` for implementation, investigation, or review with live activity. Keep one conversation per topic: send adjustments and re-reviews to its original worker with SendMessage; start new workers for new topics and independent reviews. `/codex:rescue`, `/codex:review`, and `/codex:adversarial-review` use this lifecycle; reviews remain read-only. Completed conversations are archived when the session ends with its workers idle and can be resumed later. The `/codex-native`, `/codex-native-status`, and `/codex-native-stop` commands remain available. Tasks have no fixed duration cap.', ''
+    '# Codex Companion for Claude Code', '',
+    'An independent Apache-2.0 fork of https://github.com/openai/codex-plugin-cc, maintained by HuabeiYou. Not affiliated with or endorsed by OpenAI or Anthropic.', '',
+    'One plugin combines the companion runtime and native Mod. Claude supervises Codex workers and reads their feedback automatically. Codex runs its own local harness, using your existing Codex authentication and configuration.', '',
+    'Use `codex:worker` for implementation, investigation, or review with live activity. Follow-ups and re-reviews return to their original topic worker through SendMessage. `/codex:rescue`, `/codex:review`, and `/codex:adversarial-review` use this lifecycle; reviews remain read-only. `/codex-native-status` opens the activity pane. Stop an owned worker from its pane or Claude task controls.', '',
+    'Implementation uses workspace-write and approvalPolicy: never; review uses read-only. The plugin does not forward interactive Codex approval prompts. Completed idle conversations are archived recoverably on session end. Arbitrary exit/restart restoration is not guaranteed.', '',
+    'Beta qualification: macOS, Claude Code 2.1.292, Codex CLI 0.160.0, Node 24.16.0. Claude function hooks are an early-access API. Linux, Windows, and other host versions are not qualified for this release.', '',
+    'Installation, updates, and release evidence: https://github.com/HuabeiYou/codex-plugin-cc', ''
   ].join('\n'));
   writeJson(path.join(destination, '.claude-plugin', 'marketplace.json'), {
-    name: 'huabei-codex', owner: { name: 'HuabeiYou' },
-    metadata: { description: 'Local field-test build of the Codex integration fork.', version },
-    plugins: [{ name: 'codex', version, source: './plugins/codex', description: 'Patched Codex runtime and native Mod in one plugin.' }]
+    name: 'codex-companion', owner: { name: 'HuabeiYou' },
+    metadata: { description: release ? 'Independent Codex integration with native Claude workers.' : 'Local field-test build of Codex Companion.', version },
+    plugins: [{ name: 'codex', version, source: './plugins/codex', description: 'Codex Companion: native workers, live activity, and persistent topic conversations.', author: { name: 'HuabeiYou' } }]
   });
-  writeJson(markerFile, { generator: MARKER, version, plugin: 'codex@huabei-codex' });
+  writeJson(markerFile, { generator: MARKER, version, plugin: 'codex@codex-companion', sourceHash });
   return { marketplaceRoot: destination, pluginRoot, version };
 }
 

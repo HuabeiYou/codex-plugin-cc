@@ -1,0 +1,6 @@
+{
+  "generator": "codex-single-plugin-bundle",
+  "version": "1.1.0-beta.1",
+  "plugin": "codex@codex-companion",
+  "sourceHash": "98fb326c913fc1400515d50054bda89827df7dc154384c6110cfec77dd533896"
+}

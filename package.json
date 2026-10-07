@@ -1,12 +1,12 @@
 {
-  "name": "@openai/codex-plugin-cc",
-  "version": "1.0.6",
+  "name": "@huabeiyou/codex-companion",
+  "version": "1.1.0-beta.1",
   "private": true,
   "type": "module",
-  "description": "Use Codex from Claude Code to review code or delegate tasks.",
+  "description": "Codex Companion: native Codex workers and persistent topic conversations in Claude Code.",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=18.18.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "bump-version": "node scripts/bump-version.mjs",
@@ -21,7 +21,14 @@
     "prototype:navigation": "node scripts/native-navigation-acceptance.mjs",
     "bundle": "node scripts/build-single-plugin.mjs",
     "bundle:validate": "npm run bundle && claude plugin validate output/codex-local-marketplace --strict --json && claude plugin validate output/codex-local-marketplace/plugins/codex --strict --json",
-    "bundle:test": "claude plugin test output/codex-local-marketplace/plugins/codex && node scripts/native-prototype-acceptance.mjs --bundle && tsc -p output/codex-local-marketplace/plugins/codex/tsconfig.json"
+    "bundle:test": "claude plugin test output/codex-local-marketplace/plugins/codex && node scripts/native-prototype-acceptance.mjs --bundle --typecheck",
+    "release:prepare": "node scripts/prepare-release.mjs",
+    "release:check": "npm run check-version && node scripts/prepare-release.mjs --check",
+    "release:validate": "npm run release:check && claude plugin validate . --strict --json && claude plugin validate release/plugins/codex --strict --json",
+    "release:test": "claude plugin test release/plugins/codex && node scripts/native-prototype-acceptance.mjs --release --typecheck",
+    "release:acceptance:real": "node scripts/native-prototype-acceptance.mjs --release --real-workflow --typecheck",
+    "release:pack": "npm run release:check && python3 scripts/package-release.py",
+    "release:install:test": "node scripts/install-release-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
